@@ -27,6 +27,27 @@ services:
     mem_limit: 64m
     cpus: 0.1
 
+  browser:                            # Chromium для VK и Facebook (фаза 2): вход автора через веб-интерфейс по SSH-туннелю
+    image: lscr.io/linuxserver/chromium:latest
+    restart: unless-stopped
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Europe/Lisbon
+      CUSTOM_USER: nikita
+      PASSWORD: ${BROWSER_PASSWORD:?задайте BROWSER_PASSWORD в .env}
+      CHROME_CLI: --remote-debugging-port=9222 --lang=ru-RU --no-first-run
+      DOCKER_MODS: linuxserver/mods:universal-package-install
+      INSTALL_PACKAGES: socat
+    volumes:
+      - ./browser:/config                                   # профиль Chromium: входы в VK и Facebook
+      - ./deploy/browser-services:/custom-services.d:ro     # мост к отладочному порту для контейнера smm
+    ports:
+      - "127.0.0.1:3001:3001"                               # веб-интерфейс только на сервере, снаружи — через ssh -L
+    shm_size: 1gb
+    mem_limit: 2g
+    cpus: 1.0
+
 networks:
   edge:
     external: true                    # общая сеть сервера, к ней подключён Caddy с доменами
