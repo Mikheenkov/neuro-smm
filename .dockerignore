@@ -9,3 +9,6 @@ docs
 SERVER.md
 server.md
 WEB.md
+browser
+deploy
+media.Caddyfile
