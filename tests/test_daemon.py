@@ -153,7 +153,8 @@ async def test_publish_single_network_and_revise_by_author_notes(daemon, monkeyp
     assert [n for n, _ in daemon.published] == ["max"]
 
     # Доработка Threads по словам автора: замечание уходит модели и сохраняется.
-    revised = {**THREADS, "parts": ['Первая мысль. <a ref="L1">Цены</a>.', "Claude 5.5 подешевел до $4 за миллион токенов.", "Вторая мысль."]}
+    revised = {**THREADS, "parts": ['Первая мысль. <a ref="L1">Цены</a>.', "Claude 5.5 подешевел до $4 за миллион токенов.", "Вторая мысль."],
+               "topic_tags": ["ИИ", "Бизнес", "Нейросети"]}
     daemon.adapter = lambda: Adapter(daemon.cfg, FakeProvider({"threads": revised}, {"threads": "pass"}), prefilters=False)
     await daemon.revise(post["id"], "threads", "разбей на 3 поста по мыслям")
     gen = json.loads(daemon.db.post(post["id"])["gen_json"])

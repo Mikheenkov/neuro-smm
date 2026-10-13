@@ -123,9 +123,12 @@ def validate(
                 res.err(f"пост {i + 1}: хэштеги в тексте Threads не ставим (есть topic_tag)")
             if spec.get("mode", "separate") == "separate" and re.match(r"\s*\(?\d+\s*/\s*\d+", t):
                 res.err(f"пост {i + 1}: нумерация «1/3» — посты отдельные, не цепочка")
-        tag = out.get("topic_tag")
-        if tag and not _TOPIC_TAG.match(tag):
-            res.err(f"topic_tag «{tag}» невалиден (1–50 символов, без точек и &)")
+        tags = [t.lstrip("#").strip() for t in (out.get("topic_tags") or [])]
+        if len(tags) != len(parts):
+            res.err(f"topic_tags: нужен ровно один хэштег на каждый пост ({len(parts)}), а их {len(tags)}")
+        for t in tags:
+            if not _TOPIC_TAG.match(t):
+                res.err(f"хэштег «{t}» невалиден (1–50 символов, без точек и &)")
         link_att = out.get("link_attachment_ref")  # к посту с фото карточку не прикрепляем — это решает издатель
         full_plain = "\n".join(plains) + "\n" + attach_plain
         _check_text_rules(res, full_plain, allow_tg=False)
@@ -133,7 +136,7 @@ def validate(
             "parts": texts,
             "text_attachment": render_plain(out["text_attachment_ir"], manifest, "threads") if out.get("text_attachment_ir") else None,
             "link_attachment_url": next((ml.decisions["threads"]["target_url"] for ml in manifest if ml.ref == link_att), None),
-            "topic_tag": tag,
+            "topic_tags": tags,
             "mode": spec.get("mode", "separate"),
         }
     elif network == "story":

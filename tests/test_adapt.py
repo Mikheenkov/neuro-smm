@@ -39,7 +39,7 @@ GOOD_MAX = {"skip": False, "skip_reason": None,
             "buttons": [{"label": "Цены Claude", "ref": "L1"}], "dropped_facts": []}
 BAD_MAX = {**GOOD_MAX, "text_ir": "Claude 5.5 подешевел до $5, подробности в моём телеграм-канале.", "buttons": []}
 THREADS = {"skip": False, "skip_reason": None, "parts": ['Claude 5.5 теперь $4 за миллион токенов. <a ref="L1">Цены</a>.'],
-           "text_attachment_ir": None, "link_attachment_ref": "L1", "topic_tag": "ИИ-инструменты", "dropped_facts": []}
+           "text_attachment_ir": None, "link_attachment_ref": "L1", "topic_tags": ["ИИ"], "dropped_facts": []}
 
 
 def test_adapt_regenerates_invalid_network_and_publishes_after_judge():

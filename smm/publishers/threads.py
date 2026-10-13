@@ -91,8 +91,9 @@ class ThreadsPublisher:
                     params.update(media_type="CAROUSEL", children=",".join(await self._carousel_items(image_urls)))
                 elif i == card_at and link:
                     params["link_attachment"] = link
-                if rendered.get("topic_tag"):
-                    params["topic_tag"] = rendered["topic_tag"]
+                tags = rendered.get("topic_tags") or ([rendered["topic_tag"]] if rendered.get("topic_tag") else [])
+                if i < len(tags) and tags[i]:
+                    params["topic_tag"] = tags[i]
             try:
                 container = (await self._call("POST", f"{self.user_id}/threads", **params))["id"]
                 await self._wait_ready(container)

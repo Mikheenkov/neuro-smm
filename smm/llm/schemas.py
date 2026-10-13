@@ -30,7 +30,7 @@ NETWORK_SCHEMAS = {
     }),
     "threads": _obj({
         "skip": {"type": "boolean"}, "skip_reason": _NS, "parts": _STRS, "text_attachment_ir": _NS,
-        "link_attachment_ref": _NS, "topic_tag": _NS, "dropped_facts": DROPPED,
+        "link_attachment_ref": _NS, "topic_tags": _STRS, "dropped_facts": DROPPED,
     }),
     "story": _obj({
         "skip": {"type": "boolean"}, "skip_reason": _NS, "card_title": _S, "card_subtitle": _NS, "caption": _S,

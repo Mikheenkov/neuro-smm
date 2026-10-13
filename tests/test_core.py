@@ -144,7 +144,7 @@ def test_validator_requires_kept_links_in_text():
     m = build_manifest(r.links, CFG)
     inv = build_invariants("компания 40dB")
     out = {"skip": False, "skip_reason": None, "parts": ["Компания 40dB слушает людей."], "text_attachment_ir": None,
-           "link_attachment_ref": "L1", "topic_tag": None, "dropped_facts": []}
+           "link_attachment_ref": "L1", "topic_tags": ["Нейминг"], "dropped_facts": []}
     res = validate("threads", out, m, inv, CFG)
     assert any("пропала ссылка L1" in e for e in res.errors)  # карточка не заменяет ссылку в тексте
     out["parts"] = ['<a ref="L1">Компания 40dB</a> слушает людей.']

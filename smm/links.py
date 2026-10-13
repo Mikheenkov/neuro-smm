@@ -145,6 +145,9 @@ def decide(link_class: str, network: str, *, has_copy: bool = False, reachable: 
     # вместо этого убираем ссылку, оставляя слова; автор получает предупреждение.
     if network == "max" and action == "retell":
         return "name"
+    # Threads: внутренние Telegram-ссылки не нужны (правило автора 13.10.2026) — ни на свои посты, ни на канал.
+    if network == "threads" and link_class == "own_tg_post":
+        return "drop"
     return action
 
 

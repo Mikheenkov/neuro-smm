@@ -92,10 +92,10 @@ async def test_threads_separate_posts_are_independent_with_card_on_post_with_lin
 
     pub = ThreadsPublisher("42", "tok", client=threads_client(handler))
     res = await pub.publish({"parts": ["Мысль без ссылки", "Мысль про сайт (https://40db.es)"],
-                             "link_attachment_url": "https://40db.es", "topic_tag": "Нейминг", "mode": "separate"})
+                             "link_attachment_url": "https://40db.es", "topic_tags": ["Нейминг", "Бренд"], "mode": "separate"})
     assert all("reply_to_id" not in c for c in created)               # отдельные посты, не ветка
     assert "link_attachment" not in created[0] and created[1]["link_attachment"] == "https://40db.es"
-    assert all(c["topic_tag"] == "Нейминг" for c in created)
+    assert [c["topic_tag"] for c in created] == ["Нейминг", "Бренд"]  # свой хэштег у каждого поста
     assert res.extra["urls"] == ["https://t/p1", "https://t/p2"]
 
 
