@@ -1,0 +1,15 @@
+name: neuro-smm                       # свой префикс: контейнеры, сеть и тома не пересекаются с другими проектами
+
+services:
+  smm:
+    build: .
+    restart: unless-stopped           # сам поднимается после сбоя и перезагрузки сервера
+    env_file: .env                    # секреты только на сервере, права 600
+    environment:
+      SMM_DATA_DIR: /data
+      TZ: Europe/Lisbon
+    volumes:
+      - ./data:/data                  # база SQLite, медиа — переживают пересборку
+    mem_limit: 512m
+    cpus: 0.5
+    # портов наружу нет: бот сам опрашивает Telegram

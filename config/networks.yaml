@@ -1,0 +1,56 @@
+# Включённые сети и лимиты для валидаторов (§3 архитектуры).
+# Фаза 1: MAX, Threads, FB. Фаза 2: VK, Stories.
+
+max:
+  enabled: true
+  audience: ru
+  max_len: 4000
+  soft_len: 3800
+  max_buttons: 2
+  button_label_max: 30
+  max_images: 12
+  max_video_mb: 250
+  max_dropped_ratio: 0.0      # MAX — почти дословная копия: выбрасывать нельзя ничего
+
+threads:
+  enabled: true
+  audience: intl
+  mode: separate                # separate — 1–3 отдельных поста; chain — ветка ответов
+  max_posts: 3
+  part_len: 500
+  max_parts: 5
+  max_urls_per_part: 5
+  text_attachment_len: 10000
+  topic_tag_max: 50
+  max_images: 20
+  max_image_mb: 8
+  max_dropped_ratio: 1.0
+
+fb:
+  enabled: false                # фаза 2: личный профиль, публикация через браузер на сервере
+  audience: intl
+  method: browser
+  max_len: 6000
+  max_hashtags: 2
+  max_external_urls: 3
+  link_mode: plain               # plain — адресами; via_threads — без внешних ссылок, строка «Ссылки — в Threads»
+  max_images: 10
+  max_dropped_ratio: 1.0
+
+vk:
+  enabled: false                # фаза 2, браузер
+  audience: ru
+  max_len: 4000
+  max_hashtags: 2
+  max_external_urls: 1          # первые 2 недели; потом 2
+  max_images: 10
+  max_dropped_ratio: 1.0
+
+story:
+  enabled: false                # фаза 2, MTProto
+  audience: tg
+  card_title_max: 90
+  caption_max: 2048             # у автора Premium; без Premium — 200
+  max_dropped_ratio: 1.0
+
+meta_footnote: true             # сноска про Meta в MAX и VK при упоминании Instagram/Facebook

@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+secrets/
+data/
+build/
+.pytest_cache/
+.DS_Store
+# описание инфраструктуры — не в репозиторий
+SERVER.md
+server.md
+WEB.md

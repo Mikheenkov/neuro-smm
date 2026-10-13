@@ -1,0 +1,11 @@
+.venv
+.git
+.env
+data
+tests
+docs
+.pytest_cache
+**/__pycache__
+SERVER.md
+server.md
+WEB.md

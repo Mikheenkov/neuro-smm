@@ -1,0 +1,24 @@
+# Свои аккаунты и каналы автора в каждой сети.
+# Заполняется в фазе 0. Пустое значение — эквивалента нет.
+
+own_tg_channel:
+  username: mikheenkovnews      # ник Telegram-канала без @
+  internal_id: "1424181684"     # из t.me/c/<id>/... (id канала без -100)
+
+# Префиксы URL своих профилей во всех сетях (после нормализации: без www., vk.com → vk.ru).
+own_profile_prefixes:
+  - facebook.com/mikheenkov
+  # - facebook.com/<страница>
+  # - threads.com/@<ник>
+  # - vk.ru/id<номер>
+  # - max.ru/<канал>
+
+# Профиль автора в каждой сети: на него заменяются ссылки own_profile (action=map).
+profile_by_network:
+  max: https://max.ru/channel_mikheenkov
+  vk: null
+  fb: https://www.facebook.com/mikheenkov
+  threads: null
+
+# @-аккаунты, которые есть в Threads: упоминание сохраняется как @ник.
+threads_handles: {}

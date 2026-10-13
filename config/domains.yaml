@@ -1,0 +1,154 @@
+# Классы доменов для политики ссылок (§2.2 архитектуры).
+# Совпадение по суффиксу: "youtube.com" покрывает "m.youtube.com".
+# Правки автора — в domain_overrides.yaml (имеют приоритет).
+
+meta:
+  - facebook.com
+  - fb.com
+  - fb.me
+  - instagram.com
+  - threads.com
+  - threads.net
+  - whatsapp.com
+  - wa.me
+
+blocked_ru:
+  - x.com
+  - twitter.com
+  - linkedin.com
+  - lnkd.in
+  - youtube.com
+  - youtu.be
+  - medium.com
+  - discord.com
+  - discord.gg
+  - patreon.com
+  - soundcloud.com
+  - linktr.ee
+  - signal.org
+  - reddit.com
+  - quora.com
+  - substack.com
+  - tiktok.com
+  - twitch.tv
+  - vimeo.com
+  - spotify.com
+  - deviantart.com
+  - pinterest.com
+  - flickr.com
+  - telegram.org
+
+geo_blocked_by_service:
+  - openai.com
+  - chatgpt.com
+  - claude.ai
+  - claude.com
+  - anthropic.com
+  - cursor.com
+  - notion.so
+  - notion.com
+  - canva.com
+  - midjourney.com
+  - elevenlabs.io
+  - perplexity.ai
+  - gemini.google.com
+  - aistudio.google.com
+  - figma.com
+  - miro.com
+  - zoom.us
+  - grammarly.com
+  - runwayml.com
+  - suno.com
+  - lovable.dev
+  - replit.com
+  - vercel.com
+  - v0.dev
+
+ok_foreign:
+  - github.com
+  - githubusercontent.com
+  - arxiv.org
+  - huggingface.co
+  - wikipedia.org
+  - google.com
+  - docs.google.com
+  - apple.com
+  - microsoft.com
+  - mozilla.org
+  - stackoverflow.com
+  - npmjs.com
+  - pypi.org
+  - python.org
+  - producthunt.com
+  - ycombinator.com
+  - techcrunch.com
+  - theverge.com
+  - wired.com
+  - bloomberg.com
+  - reuters.com
+  - nytimes.com
+  - ft.com
+  - hbr.org
+  - mckinsey.com
+  - gartner.com
+  - statista.com
+
+ru_site:
+  - ru
+  - рф
+  - su
+  - vk.ru
+  - vk.com
+  - vk.cc
+  - vkvideo.ru
+  - max.ru
+  - dzen.ru
+  - rutube.ru
+  - yandex.ru
+  - ya.ru
+  - habr.com
+  - vc.ru
+  - tinkoff.ru
+  - tbank.ru
+  - sber.ru
+  - ozon.ru
+  - wildberries.ru
+  - avito.ru
+  - hh.ru
+  - nimax.ru
+
+circumvention:
+  - nordvpn.com
+  - expressvpn.com
+  - surfshark.com
+  - protonvpn.com
+  - proton.me/vpn
+  - mullvad.net
+  - hidemy.name
+  - windscribe.com
+  - outline.org
+  - getoutline.org
+  - amnezia.org
+  - psiphon.ca
+  - torproject.org
+  - lantern.io
+  - hide.me
+  - privateinternetaccess.com
+  - cyberghostvpn.com
+  - tunnelbear.com
+  - vpnsecure.me
+  - adguard-vpn.com
+
+# Сокращатели: раскрываются HEAD/GET-запросом до классификации.
+shorteners:
+  - bit.ly
+  - clck.ru
+  - vk.cc
+  - t.co
+  - lnkd.in
+  - goo.su
+  - tinyurl.com
+  - cutt.ly
+  - is.gd
+  - ow.ly
+  - buff.ly
