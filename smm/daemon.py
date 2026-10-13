@@ -148,7 +148,38 @@ class SMMDaemon:
         return out
 
     def threads(self) -> ThreadsPublisher:
-        return ThreadsPublisher(self.cfg.secret("THREADS_USER_ID"), self.cfg.secret("THREADS_ACCESS_TOKEN"))
+        return ThreadsPublisher(self.cfg.secret("THREADS_USER_ID"), self.threads_token())
+
+    def threads_token(self) -> str:
+        """Свежий токен Threads: после автопродления он хранится в базе, .env — только начальное значение."""
+        return self.db.get("threads_token") or self.cfg.secret("THREADS_ACCESS_TOKEN")
+
+    async def maybe_refresh_threads_token(self) -> None:
+        """Раз в сутки: если токену больше недели — продлеваем ещё на 60 дней. Сбой — предупреждение автору."""
+        now = datetime.now(timezone.utc)
+        checked = self.db.get("threads_refresh_checked")
+        if checked and now - _utc(checked) < timedelta(hours=24):
+            return
+        self.db.set("threads_refresh_checked", now.isoformat(timespec="seconds"))
+        obtained = self.db.get("threads_token_at") or os.environ.get("THREADS_TOKEN_OBTAINED_AT")
+        if not obtained:
+            obtained = now.isoformat(timespec="seconds")
+            self.db.set("threads_token_at", obtained)
+        age = now - _utc(obtained)
+        if age < timedelta(days=7):
+            return
+        try:
+            token, expires_in = await self.threads().refresh_token()
+        except PublishError as exc:
+            left = 60 - age.days
+            log.warning("не удалось продлить токен Threads: %s", exc)
+            if left <= 14:
+                await self.notify(f"⚠ Не получается продлить доступ к Threads ({exc}). Токен перестанет работать "
+                                  f"примерно через {max(left, 0)} дн. Напишите мне — выпустим новый.")
+            return
+        self.db.set("threads_token", token)
+        self.db.set("threads_token_at", now.isoformat(timespec="seconds"))
+        log.info("токен Threads продлён на %d дн.", expires_in // 86400)
 
     def max(self) -> MaxPublisher:
         import os
@@ -275,6 +306,10 @@ class SMMDaemon:
 
     async def tick(self) -> None:
         self._cleanup_public()
+        try:
+            await self.maybe_refresh_threads_token()
+        except Exception:
+            log.exception("ошибка продления токена Threads")
         if self.db.get("stopped") == "1":
             return
         now = datetime.now(timezone.utc)

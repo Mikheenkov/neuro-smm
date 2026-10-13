@@ -165,3 +165,20 @@ async def test_publish_single_network_and_revise_by_author_notes(daemon, monkeyp
     await daemon.run_post(post["id"])
     assert [n for n, _ in daemon.published] == ["max", "threads"]
     assert daemon.published[-1][1]["parts"][2] == "Вторая мысль."
+
+
+async def test_threads_token_refreshed_weekly_and_stored_in_db(daemon, monkeypatch):
+    monkeypatch.setenv("THREADS_ACCESS_TOKEN", "old")
+    monkeypatch.setenv("THREADS_USER_ID", "42")
+    monkeypatch.setenv("THREADS_TOKEN_OBTAINED_AT", "2026-01-01T00:00:00+00:00")
+    calls = []
+
+    async def fake_refresh(self):
+        calls.append(self.token)
+        return "new-token", 60 * 86400
+
+    monkeypatch.setattr("smm.publishers.threads.ThreadsPublisher.refresh_token", fake_refresh)
+    await daemon.maybe_refresh_threads_token()
+    assert calls == ["old"] and daemon.threads_token() == "new-token"
+    await daemon.maybe_refresh_threads_token()  # повторно в тот же день — не продлеваем
+    assert calls == ["old"]
