@@ -97,3 +97,27 @@ async def test_threads_separate_posts_are_independent_with_card_on_post_with_lin
     assert "link_attachment" not in created[0] and created[1]["link_attachment"] == "https://40db.es"
     assert all(c["topic_tag"] == "Нейминг" for c in created)
     assert res.extra["urls"] == ["https://t/p1", "https://t/p2"]
+
+
+async def test_threads_first_post_gets_carousel_from_several_photos():
+    created = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        params = dict(req.url.params)
+        if req.method == "POST" and req.url.path.endswith("/threads"):
+            created.append(params)
+            return httpx.Response(200, json={"id": f"c{len(created)}"})
+        if params.get("fields", "").startswith("status"):
+            return httpx.Response(200, json={"status": "FINISHED"})
+        if req.url.path.endswith("/threads_publish"):
+            return httpx.Response(200, json={"id": f"p{len(created)}"})
+        return httpx.Response(200, json={"permalink": "https://t/x"})
+
+    pub = ThreadsPublisher("42", "tok", client=threads_client(handler))
+    await pub.publish({"parts": ["Пост с фото", "Второй пост (https://40db.es)"], "link_attachment_url": "https://40db.es",
+                       "mode": "separate"}, image_urls=["https://smm/m/a.jpg", "https://smm/m/b.jpg"])
+    items = [c for c in created if c.get("is_carousel_item") == "true"]
+    carousel = next(c for c in created if c.get("media_type") == "CAROUSEL")
+    assert len(items) == 2 and carousel["children"] == "c1,c2" and carousel["text"] == "Пост с фото"
+    second = created[-1]
+    assert second["media_type"] == "TEXT" and second["link_attachment"] == "https://40db.es"

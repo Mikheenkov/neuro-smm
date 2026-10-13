@@ -126,9 +126,7 @@ def validate(
         tag = out.get("topic_tag")
         if tag and not _TOPIC_TAG.match(tag):
             res.err(f"topic_tag «{tag}» невалиден (1–50 символов, без точек и &)")
-        link_att = out.get("link_attachment_ref")
-        if link_att and has_media:
-            res.err("link_attachment разрешён только в текстовом посте без медиа")
+        link_att = out.get("link_attachment_ref")  # к посту с фото карточку не прикрепляем — это решает издатель
         full_plain = "\n".join(plains) + "\n" + attach_plain
         _check_text_rules(res, full_plain, allow_tg=False)
         res.rendered = {

@@ -1,0 +1,6 @@
+:80 {
+	# Только картинки для Threads: случайные имена, без листинга каталога, не индексируется.
+	root * /srv
+	header X-Robots-Tag "noindex, nofollow"
+	file_server
+}

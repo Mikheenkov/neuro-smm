@@ -13,3 +13,20 @@ services:
     mem_limit: 512m
     cpus: 0.5
     # портов наружу нет: бот сам опрашивает Telegram
+
+  media:                              # отдаёт только data/public (картинки для Threads) через общий Caddy
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./data/public:/srv:ro
+      - ./media.Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      default: {}
+      edge:
+        aliases: [neuro-smm-media]
+    mem_limit: 64m
+    cpus: 0.1
+
+networks:
+  edge:
+    external: true                    # общая сеть сервера, к ней подключён Caddy с доменами

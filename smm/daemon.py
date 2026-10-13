@@ -274,6 +274,7 @@ class SMMDaemon:
             await asyncio.sleep(self.d.get("tick_seconds", 20))
 
     async def tick(self) -> None:
+        self._cleanup_public()
         if self.db.get("stopped") == "1":
             return
         now = datetime.now(timezone.utc)
@@ -397,9 +398,36 @@ class SMMDaemon:
             paths.append(path)
         return paths
 
+    def _public_urls(self, paths: list[Path]) -> list[str] | None:
+        """Публичные адреса картинок для Threads: случайные имена, файлы живут сутки (см. tick)."""
+        base = os.environ.get("SMM_PUBLIC_BASE_URL", "").rstrip("/")
+        if not base or not paths:
+            return None
+        import shutil
+        import uuid
+        out_dir = self.cfg.data_dir / "public" / "m"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        urls = []
+        for p in paths:
+            name = f"{uuid.uuid4().hex}{p.suffix}"
+            shutil.copyfile(p, out_dir / name)
+            urls.append(f"{base}/m/{name}")
+        return urls
+
+    def _cleanup_public(self, max_age_hours: int = 24) -> None:
+        import time
+        folder = self.cfg.data_dir / "public" / "m"
+        if not folder.exists():
+            return
+        for f in folder.iterdir():
+            if f.is_file() and time.time() - f.stat().st_mtime > max_age_hours * 3600:
+                f.unlink(missing_ok=True)
+
     async def _publish_one(self, net: str, rendered: dict, media: list[dict], done: dict) -> PublishResult:
         if net == "threads":
-            return await self.threads().publish({**rendered, "_had_media": bool(media)}, done=done)
+            photos = await self._download(media, "photo", max_mb=8)
+            image_urls = self._public_urls(photos[:20])
+            return await self.threads().publish({**rendered, "_had_media": bool(media)}, image_urls=image_urls, done=done)
         if net == "max":
             photos = await self._download(media, "photo")
             videos = await self._download(media, "video")

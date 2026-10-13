@@ -56,6 +56,16 @@ class ThreadsPublisher:
                 await asyncio.sleep(5 * (attempt + 1))
         raise AssertionError("unreachable")
 
+    async def _carousel_items(self, image_urls: list[str]) -> list[str]:
+        items = []
+        for url in image_urls[:20]:
+            cid = (await self._call("POST", f"{self.user_id}/threads", media_type="IMAGE", image_url=url,
+                                    is_carousel_item="true"))["id"]
+            items.append(cid)
+        for cid in items:
+            await self._wait_ready(cid)
+        return items
+
     async def publish(self, rendered: dict, *, image_urls: list[str] | None = None, done: dict | None = None) -> PublishResult:
         """rendered — результат валидатора: parts, link_attachment_url, topic_tag, mode.
         mode=separate: каждый элемент parts — отдельный пост; mode=chain — ветка через reply_to_id.
@@ -75,8 +85,10 @@ class ThreadsPublisher:
             if chain and i > 0:
                 params["reply_to_id"] = part_ids[-1]
             else:
-                if i == 0 and image_urls:
+                if i == 0 and image_urls and len(image_urls) == 1:
                     params.update(media_type="IMAGE", image_url=image_urls[0])
+                elif i == 0 and image_urls:
+                    params.update(media_type="CAROUSEL", children=",".join(await self._carousel_items(image_urls)))
                 elif i == card_at and link:
                     params["link_attachment"] = link
                 if rendered.get("topic_tag"):
