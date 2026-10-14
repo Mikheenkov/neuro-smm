@@ -178,10 +178,12 @@ class FBPublisher(BrowserPublisher):
         opener = page.get_by_role("button", name=self._OPENER).or_(page.get_by_text(self._OPENER)).first
         await opener.click(timeout=40000)
         dlg = page.locator("[role=dialog]:has([contenteditable=true])").last
-        await dlg.wait_for(timeout=20000)
+        await dlg.wait_for(timeout=60000)  # окно создания поста у Facebook иногда грузится долго
         box = dlg.locator("[contenteditable=true][role=textbox]").first
         await _pause()
         await box.click()
+        await page.keyboard.press("Control+A")  # Facebook мог сохранить черновик прошлой попытки
+        await page.keyboard.press("Delete")
         await page.keyboard.insert_text(text)
         await _pause()
         if _norm(await box.inner_text())[:80] != _norm(text)[:80]:
