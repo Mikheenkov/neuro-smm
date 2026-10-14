@@ -195,8 +195,17 @@ class FBPublisher(BrowserPublisher):
         if await nxt.count():
             await nxt.first.click()
             await page.wait_for_timeout(2500)
-        post_btn = page.locator("[role=dialog]").last.get_by_role("button", name=self._POST).first
-        await post_btn.wait_for(timeout=20000)
+        post_btn = None
+        for _ in range(20):  # кнопка «Post» на экране «Post settings»; берём видимую
+            cands = page.get_by_role("button", name=self._POST)
+            for i in range(await cands.count()):
+                if await cands.nth(i).is_visible():
+                    post_btn = cands.nth(i)
+            if post_btn:
+                break
+            await page.wait_for_timeout(1000)
+        if post_btn is None:
+            raise PublishError("Facebook: не нашёл кнопку «Post»", retryable=False)
         if rehearsal:
             shot = await self._shot(page, "rehearsal")
             return PublishResult("", None, {"rehearsal": True, "shot": shot}, ["репетиция: дошёл до кнопки «Post», не нажимал"])
