@@ -56,6 +56,7 @@ def daemon(tmp_path, monkeypatch):
         return PublishResult(f"{net}-1", f"https://example/{net}/1", {"part_ids": ["t1"]} if net == "threads" else {})
 
     d.notify = notify
+    d.networks = lambda: ["threads", "max"]  # браузерные сети проверяются отдельно
     d.send_card = send_card
     d._publish_one = publish_one
     d.adapter = lambda: Adapter(d.cfg, FakeProvider({"max": GOOD_MAX, "threads": THREADS}, {"max": "pass", "threads": "pass"}),

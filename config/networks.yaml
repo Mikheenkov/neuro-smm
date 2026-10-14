@@ -27,7 +27,8 @@ threads:
   max_dropped_ratio: 1.0
 
 fb:
-  enabled: false                # фаза 2: личный профиль, публикация через браузер на сервере
+  enabled: true                 # личный профиль, публикация через браузер на сервере
+  publish: false                # пока репетиция: заполнить пост, прислать снимок, не публиковать
   audience: intl
   method: browser
   max_len: 6000
@@ -38,11 +39,12 @@ fb:
   max_dropped_ratio: 1.0
 
 vk:
-  enabled: false                # фаза 2, браузер
+  enabled: true                 # личная страница, публикация через браузер на сервере
+  publish: false                # пока репетиция: заполнить пост, прислать снимок, не публиковать
   audience: ru
   max_len: 4000
   max_hashtags: 2
-  max_external_urls: 1          # первые 2 недели; потом 2
+  max_external_urls: 3
   max_images: 10
   max_dropped_ratio: 1.0
 

@@ -36,6 +36,7 @@ from smm.links import classify, normalize_url
 from smm.llm.anthropic_api import AnthropicApiProvider
 from smm.publishers import PublishError, PublishResult
 from smm.publishers.max_api import MaxPublisher, find_post_url
+from smm.publishers.browser import FBPublisher, VKPublisher
 from smm.publishers.threads import ThreadsPublisher
 
 log = logging.getLogger("smm")
@@ -180,6 +181,17 @@ class SMMDaemon:
         self.db.set("threads_token", token)
         self.db.set("threads_token_at", now.isoformat(timespec="seconds"))
         log.info("токен Threads продлён на %d дн.", expires_in // 86400)
+
+    def vk(self) -> VKPublisher:
+        return VKPublisher(os.environ.get("VK_USER_ID", "873291997"), shots_dir=self.cfg.data_dir / "shots")
+
+    def fb(self) -> FBPublisher:
+        url = (self.cfg.equivalents.get("profile_by_network") or {}).get("fb") or "https://www.facebook.com/mikheenkov"
+        return FBPublisher(url, shots_dir=self.cfg.data_dir / "shots")
+
+    def is_live(self, net: str) -> bool:
+        """publish: false в networks.yaml — сеть пока в режиме репетиции: заполнить, снять экран, не публиковать."""
+        return (self.cfg.networks.get(net) or {}).get("publish", True)
 
     def max(self) -> MaxPublisher:
         import os
@@ -471,7 +483,25 @@ class SMMDaemon:
             if big:
                 res.warnings.append("видео не перенесено: больше 20 МБ")
             return res
+        if net in ("vk", "fb"):
+            photos = await self._download(media, "photo")
+            pub = self.vk() if net == "vk" else self.fb()
+            res = await pub.publish(rendered, images=photos[:10], rehearsal=not self.is_live(net))
+            if res.extra.get("rehearsal"):
+                await self._send_shot(res.extra.get("shot"), f"Репетиция {NET_TITLES[net]}: так выглядит пост перед "
+                                      f"нажатием «Опубликовать». Ничего не опубликовано.")
+            if any(m["type"] == "video" for m in media):
+                res.warnings.append("видео в VK и Facebook пока не переносится")
+            return res
         raise PublishError(f"публикация в {net} ещё не реализована", retryable=False)
+
+    async def _send_shot(self, name: str | None, caption: str) -> None:
+        from aiogram.types import FSInputFile
+        path = self.cfg.data_dir / "shots" / (name or "")
+        if name and path.exists():
+            await self.bot.send_photo(self.author_id, FSInputFile(path), caption=caption[:1000])
+        else:
+            await self.notify(caption)
 
     async def publish(self, post_id: int) -> None:
         post = self.db.post(post_id)
@@ -500,6 +530,10 @@ class SMMDaemon:
                                            attempt_started_at=now_iso())
                 try:
                     res = await self._publish_one(net, rendered, media, done)
+                    if res.extra.get("rehearsal"):
+                        self.db.upsert_publication(post_id, net, state="skipped", error="репетиция — снимок отправлен, "
+                                                   "публикация не выполнялась", extra_json=dumps(res.extra))
+                        break
                     self.db.upsert_publication(post_id, net, state="published", remote_id=res.remote_id,
                                                remote_url=res.url, extra_json=dumps({**res.extra, "warnings": res.warnings}),
                                                error=None, published_at=now_iso())
