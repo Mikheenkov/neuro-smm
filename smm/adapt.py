@@ -107,10 +107,17 @@ class Adapter:
 
         # 3. Редактор: анализ + все сети одним вызовом.
         prompts = self.cfg.prompts_dir
-        editor_prompt = build_editor_prompt(prompts, networks)
-        if feedback:
-            editor_prompt = type(editor_prompt)(editor_prompt.text + _FEEDBACK_NOTE, editor_prompt.prompt_hash)
-        data = self._call(result, editor_prompt.text, payload, editor_schema(networks), "editor")
+        # Строгая JSON-схема на все сети сразу слишком велика для API («compiled grammar is too large»),
+        # поэтому редактор пишет сети группами по EDITOR_BATCH; анализ берём из первого вызова.
+        data = {"analysis": None, "networks": {}}
+        for i in range(0, len(networks), EDITOR_BATCH):
+            group = networks[i:i + EDITOR_BATCH]
+            editor_prompt = build_editor_prompt(prompts, group)
+            if feedback:
+                editor_prompt = type(editor_prompt)(editor_prompt.text + _FEEDBACK_NOTE, editor_prompt.prompt_hash)
+            part = self._call(result, editor_prompt.text, {**payload, "networks": group}, editor_schema(group), "editor")
+            data["analysis"] = data["analysis"] or part["analysis"]
+            data["networks"].update(part["networks"])
         result.analysis = data["analysis"]
         # Сущности из анализа усиливают инварианты (только те, что реально есть в исходнике).
         inv = build_invariants(source_plain, [e["name"] for e in data["analysis"].get("entities", [])])
@@ -178,6 +185,8 @@ class Adapter:
                     v = {**v, "verdict": "block"}
             result.verdicts[net] = v
 
+
+EDITOR_BATCH = 2  # сетей в одном вызове редактора
 
 _FEEDBACK_NOTE = """
 
