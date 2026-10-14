@@ -107,6 +107,14 @@ class VKPublisher(BrowserPublisher):
         await self._check_login(page)
         await page.locator("[data-testid=posting_create_post_button]").click(timeout=40000)
         box = page.locator("[data-testid=posting_base_screen_input_message]")
+        # Если остался черновик (например, после репетиции), VK спрашивает «открыть черновик?» — начинаем заново.
+        start_over = page.get_by_role("button", name=re.compile(r"^(start over|начать заново)$", re.I))
+        try:
+            await box.or_(start_over).first.wait_for(timeout=20000)
+        except Exception:
+            raise PublishError("VK: редактор поста не открылся", retryable=True)
+        if await start_over.count() and await start_over.first.is_visible():
+            await start_over.first.click()
         await box.wait_for(timeout=20000)
         if images:
             await page.locator("[data-testid=posting_base_screen_download_from_device]").set_input_files(
@@ -179,7 +187,7 @@ class FBPublisher(BrowserPublisher):
         if _norm(await box.inner_text())[:80] != _norm(text)[:80]:
             raise PublishError("Facebook: текст вставился не полностью — публикацию остановил", retryable=False)
         if images:
-            await dlg.get_by_role("button", name=re.compile(r"photo/video|фото/видео", re.I)).first.click()
+            await dlg.get_by_role("button", name=re.compile(r"photo.video|фото.видео", re.I)).first.click()
             await page.wait_for_timeout(1500)
             await dlg.locator("input[type=file]").first.set_input_files([str(p) for p in images[:10]])
             await page.wait_for_timeout(4000 + 2500 * len(images[:10]))
