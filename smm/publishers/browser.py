@@ -215,7 +215,30 @@ class FBPublisher(BrowserPublisher):
         await post_btn.click()
         await page.locator("[role=dialog]:has([contenteditable=true])").wait_for(state="detached", timeout=90000)
         await page.wait_for_timeout(8000)
-        url = self._match(await self._recent_posts(page), text)
-        if not url or url == "?":
+        await self._recent_posts(page)
+        url = await self.permalink(page, text)
+        if not url:
             return PublishResult("", self.profile_url, {}, ["пост опубликован, но прямую ссылку найти не удалось — ссылка на профиль"])
         return PublishResult(url, url)
+
+    async def permalink(self, page: Page, text: str) -> str | None:
+        """Ссылка на пост: Facebook подставляет настоящий адрес в ссылку времени публикации только при наведении."""
+        head = _norm(text)[:40]
+        arts = page.locator("[role=article], [aria-posinset]")
+        for i in range(min(await arts.count(), 6)):
+            art = arts.nth(i)
+            if head not in _norm(await art.inner_text()):
+                continue
+            anchors = art.locator("a[role=link]")
+            for j in range(min(await anchors.count(), 15)):
+                a = anchors.nth(j)
+                try:
+                    await a.hover(timeout=2000)
+                    await page.wait_for_timeout(400)
+                except Exception:
+                    continue
+                href = await a.get_attribute("href") or ""
+                if re.search(r"/posts/|pfbid|story_fbid|permalink", href):
+                    return href.split("?")[0]
+            return None
+        return None
