@@ -722,8 +722,12 @@ class SMMDaemon:
                 n = len(rendered["parts"])
                 label = (lambda i: f"[пост {i} из {n}]\n") if rendered.get("mode") != "chain" else (lambda i: f"[{i}/{n}]\n")
                 tags = rendered.get("topic_tags") or []
-                body = "\n\n".join((label(i) if n > 1 else "") + p + (f"\n#{tags[i - 1]}" if i - 1 < len(tags) else "")
-                                     for i, p in enumerate(rendered["parts"], 1))
+                thoughts = rendered.get("key_thoughts") or []
+                body = "\n\n".join(
+                    (label(i) if n > 1 else "")
+                    + (f"💡 {thoughts[i - 1]}\n\n" if i - 1 < len(thoughts) and thoughts[i - 1] else "")
+                    + p + (f"\n#{tags[i - 1]}" if i - 1 < len(tags) else "")
+                    for i, p in enumerate(rendered["parts"], 1))
             else:
                 body = rendered.get("text", "")
             if net == "max" and rendered.get("buttons"):

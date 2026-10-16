@@ -101,6 +101,15 @@ def validate(
     dropped = [f"{d['fact']}" for d in out.get("dropped_facts") or []]
 
     if network == "threads":
+        if "posts" in out:  # новая форма: ключевые мысли → посты
+            posts = out.get("posts") or []
+            thoughts = out.get("key_thoughts") or []
+            if not thoughts:
+                res.err("threads: не выделены ключевые мысли (key_thoughts)")
+            if len(posts) != len(thoughts):
+                res.err(f"threads: мыслей {len(thoughts)}, а постов {len(posts)} — нужен ровно один пост на мысль")
+            out = {**out, "parts": [p_.get("text_ir", "") for p_ in posts],
+                   "topic_tags": [p_.get("topic_tag", "") for p_ in posts]}
         parts = out.get("parts") or []
         if not parts:
             res.err("threads: нет ни одной части")
@@ -138,6 +147,7 @@ def validate(
             "link_attachment_url": next((ml.decisions["threads"]["target_url"] for ml in manifest if ml.ref == link_att), None),
             "topic_tags": tags,
             "mode": spec.get("mode", "separate"),
+            "key_thoughts": [t.get("thought") for t in out.get("key_thoughts") or []],
         }
     elif network == "story":
         title, caption = out.get("card_title") or "", out.get("caption") or ""
@@ -188,6 +198,8 @@ def validate(
 
     _check_links_kept(res, network, out, manifest, spec)
     chk = check_invariants(inv, full_plain, dropped, allowed_extra_text=allowed_extra_text, glossary=glossary)
+    if not spec.get("check_missing_facts", True):  # Threads берёт только ключевые мысли — пропуски норма
+        chk.missing, chk.dropped_ratio = [], 0.0
     for e in chk.errors(spec.get("max_dropped_ratio", 1.0)):
         res.err(e)
     return res

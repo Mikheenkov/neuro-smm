@@ -28,9 +28,20 @@ NETWORK_SCHEMAS = {
         "skip": {"type": "boolean"}, "skip_reason": _NS, "text_ir": _S, "main_link_ref": _NS,
         "hashtags": _STRS, "dropped_facts": DROPPED,
     }),
+    # Threads: сначала анализ ключевых мыслей, потом по посту на каждую — порядок полей задаёт порядок мышления.
     "threads": _obj({
-        "skip": {"type": "boolean"}, "skip_reason": _NS, "parts": _STRS, "text_attachment_ir": _NS,
-        "link_attachment_ref": _NS, "topic_tags": _STRS, "dropped_facts": DROPPED,
+        "skip": {"type": "boolean"}, "skip_reason": _NS,
+        "key_thoughts": {"type": "array", "items": _obj({
+            "thought": _S,            # мысль одним предложением
+            "why_key": _S,            # почему это ключевая мысль, а не деталь
+            "source_excerpts": _STRS,  # дословные фрагменты исходника, на которых она держится
+        })},
+        "posts": {"type": "array", "items": _obj({
+            "thought_index": {"type": "integer"},
+            "text_ir": _S,
+            "topic_tag": _S,
+        })},
+        "link_attachment_ref": _NS, "dropped_facts": DROPPED,
     }),
     "story": _obj({
         "skip": {"type": "boolean"}, "skip_reason": _NS, "card_title": _S, "card_subtitle": _NS, "caption": _S,
