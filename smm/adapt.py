@@ -164,14 +164,16 @@ class Adapter:
         verdicts = {v["network"]: v for v in self._call(result, judge_prompt.text, judge_payload, JUDGE, "judge")["verdicts"]}
         for net in nets:
             v = verdicts.get(net) or {"network": net, "verdict": "block", "issues": [{"severity": "major", "text": "судья не вынес вердикт"}], "fix_instructions": None}
-            if v["verdict"] == "fix":
+            # block с указаниями судьи — тоже одна попытка исправить, но публикуем только после повторного суда.
+            was_block = v["verdict"] == "block" and bool(v.get("fix_instructions"))
+            if v["verdict"] == "fix" or was_block:
                 regen_payload = {**payload, "networks": [net], "previous": outputs[net],
                                  "errors": [i["text"] for i in v["issues"]], "fix_instructions": v.get("fix_instructions")}
                 regen_prompt = build_editor_prompt(self.cfg.prompts_dir, [net])
                 outputs[net] = self._call(result, regen_prompt.text + _REGEN_NOTE, regen_payload, regen_schema(net), "regen")["result"]
                 result.networks[net] = check(net, outputs[net])
                 majors = any(i["severity"] == "major" for i in v["issues"])
-                if result.networks[net].ok and majors:
+                if result.networks[net].ok and (majors or was_block):
                     again = self._call(result, judge_prompt.text,
                                        {**judge_payload, "versions": {net: {"output": outputs[net], "rendered": result.networks[net].rendered}}},
                                        JUDGE, "judge")["verdicts"]

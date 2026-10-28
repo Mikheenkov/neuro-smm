@@ -15,9 +15,10 @@ ENTITIES = [
 class FakeProvider:
     name = "fake"
 
-    def __init__(self, editor_networks: dict, verdicts: dict[str, str]):
+    def __init__(self, editor_networks: dict, verdicts: dict[str, str | list[str]], fix_instructions: str | None = None):
         self.editor_networks = editor_networks
-        self.verdicts = verdicts
+        self.verdicts = verdicts  # список — вердикты по очереди на каждый вызов судьи
+        self.fix_instructions = fix_instructions
         self.calls: list[tuple[str, dict]] = []
 
     def generate(self, system, payload, schema, *, role, model):
@@ -27,7 +28,8 @@ class FakeProvider:
                 {"name": "Claude", "kind": "product"}], "links": [], "ad_suspect": False, "ad_evidence": []},
                 "networks": self.editor_networks}
         elif role == "judge":
-            data = {"verdicts": [{"network": n, "verdict": v, "issues": [], "fix_instructions": None}
+            data = {"verdicts": [{"network": n, "verdict": v.pop(0) if isinstance(v, list) else v, "issues": [],
+                                  "fix_instructions": self.fix_instructions}
                                  for n, v in self.verdicts.items()]}
         else:  # regen: исправленный MAX
             data = {"network": "max", "result": GOOD_MAX}
@@ -70,4 +72,19 @@ def test_ad_post_never_reaches_llm():
 def test_judge_block_is_not_published():
     provider = FakeProvider({"max": GOOD_MAX}, {"max": "block"})
     result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
+    assert result.publishable() == {}
+
+
+def test_judge_block_with_instructions_is_fixed_and_rejudged():
+    provider = FakeProvider({"max": GOOD_MAX}, {"max": ["block", "pass"]}, fix_instructions="убери выдуманное «в месяц»")
+    result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
+    assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge"]
+    assert provider.calls[2][1]["fix_instructions"] == "убери выдуманное «в месяц»"
+    assert "max" in result.publishable()
+
+
+def test_judge_block_twice_is_not_published():
+    provider = FakeProvider({"max": GOOD_MAX}, {"max": ["block", "block"]}, fix_instructions="убери выдуманное")
+    result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
+    assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge"]
     assert result.publishable() == {}
