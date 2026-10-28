@@ -28,7 +28,9 @@ def _cdp_url(host: str = "browser", port: int = 9223) -> str:
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", text or "")).strip().lower()
+    # Только буквы и цифры: сети показывают эмодзи картинками, и в innerText их нет.
+    text = re.sub(r"[^\w\s]|_", " ", re.sub(r"https?://\S+", "", text or ""))
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 async def _pause(lo: float = 0.8, hi: float = 2.5) -> None:

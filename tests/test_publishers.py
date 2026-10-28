@@ -121,3 +121,10 @@ async def test_threads_first_post_gets_carousel_from_several_photos():
     assert len(items) == 2 and carousel["children"] == "c1,c2" and carousel["text"] == "Пост с фото"
     second = created[-1]
     assert second["media_type"] == "TEXT" and second["link_attachment"] == "https://40db.es"
+
+
+def test_browser_match_ignores_emoji_rendered_as_images():
+    from smm.publishers.browser import VKPublisher
+    text = "Умереть под мостом после IT ☠️\n\nПосле моего поста про рынок труда мне накидали странных комментариев"
+    wall = [("https://vk.ru/wall1_73", "Nikita Mikheenkov\nУмереть под мостом после IT\nПосле моего поста про рынок труда мне накидали ст")]
+    assert VKPublisher._match(None, wall, text) == "https://vk.ru/wall1_73"
