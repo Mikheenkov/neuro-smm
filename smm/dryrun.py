@@ -3,7 +3,7 @@
     uv run python -m smm.dryrun post.json            # JSON сообщения Telegram (text/caption + entities)
     uv run python -m smm.dryrun --text "Текст поста"  # просто текст, без ссылок
 
-Нужен ANTHROPIC_API_KEY в .env. Ничего никуда не публикует.
+Нужен ключ провайдера из config/llm.yaml в .env. Ничего никуда не публикует.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from smm.adapt import Adapter, PostInput, safe_adapt
 from smm.config import load_config
-from smm.llm.anthropic_api import AnthropicApiProvider
+from smm.llm import build_provider
 
 
 def main() -> int:
@@ -36,8 +36,7 @@ def main() -> int:
         ap.error("нужен файл сообщения или --text")
 
     cfg = load_config()
-    provider = AnthropicApiProvider(cfg.secret("ANTHROPIC_API_KEY"), effort=cfg.llm.get("effort"),
-                                    workspace_id=os.environ.get("ANTHROPIC_WORKSPACE_ID") or None)
+    provider = build_provider(cfg)
     networks = args.networks.split(",") if args.networks else None
     result = safe_adapt(Adapter(cfg, provider), post, networks)
 

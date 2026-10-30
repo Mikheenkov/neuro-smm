@@ -1,12 +1,13 @@
-# LLM-слой (§5). Основной канал — ключ Anthropic API (решение автора 07.10.2026).
+# LLM-слой (§5). Основной канал — OpenRouter (решение автора 30.10.2026: организация Anthropic ждёт верификации).
+# Вернуться на прямой API: providers: [openrouter] и имена моделей без префикса (claude-opus-5-5, claude-sonnet-5-5).
 # Если будет дорого: поставить первым провайдер claude_cli (подписка), когда он появится.
 
-providers: [anthropic_api]
+providers: [openrouter]
 
 models:
-  editor: claude-opus-5-5
-  regen: claude-opus-5-5
-  judge: claude-sonnet-5-5     # судья всегда на другой модели, чем редактор
+  editor: anthropic/claude-opus-5.5
+  regen: anthropic/claude-opus-5.5
+  judge: anthropic/claude-sonnet-5.5     # судья всегда на другой модели, чем редактор
 
 effort:
   editor: medium

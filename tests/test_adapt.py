@@ -88,3 +88,37 @@ def test_judge_block_twice_is_not_published():
     result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
     assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge"]
     assert result.publishable() == {}
+
+
+def _openrouter(handler):
+    import httpx
+    from smm.llm.openrouter import OpenRouterProvider
+    return OpenRouterProvider("k", transport=httpx.MockTransport(handler))
+
+
+def test_openrouter_returns_parsed_json_and_real_cost():
+    import httpx, json
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["response_format"]["json_schema"]["schema"] == {"type": "object"}
+        return httpx.Response(200, json={"model": "anthropic/claude-opus-5.5", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.01},
+                                         "choices": [{"finish_reason": "stop", "message": {"content": '{"a": 1}'}}]})
+
+    res = _openrouter(handler).generate("s", {"p": 1}, {"type": "object"}, role="editor", model="anthropic/claude-opus-5.5")
+    assert res.data == {"a": 1} and res.cost_usd_est == 0.01 and res.input_tokens == 10
+
+
+def test_openrouter_errors_map_to_classes():
+    import httpx, pytest
+    from smm.llm.base import LLMError
+
+    cases = [(402, {"error": {"code": 402, "message": "no credits"}}, "auth"),
+             (429, {"error": {"code": 429, "message": "slow"}}, "limit"),
+             (502, {"error": {"code": 502, "message": "down"}}, "overloaded"),
+             (200, {"error": {"code": 503, "message": "down"}}, "overloaded")]
+    for status, payload, cls in cases:
+        provider = _openrouter(lambda r, s=status, p=payload: httpx.Response(s, json=p))
+        with pytest.raises(LLMError) as exc:
+            provider.generate("s", {}, {}, role="judge", model="m")
+        assert exc.value.error_class == cls

@@ -33,7 +33,7 @@ from smm.config import Config, load_config
 from smm.db import DB, dumps, now_iso, parse_iso
 from smm.ir import content_hash, entities_to_ir
 from smm.links import classify, normalize_url
-from smm.llm.anthropic_api import AnthropicApiProvider
+from smm.llm import build_provider
 from smm.publishers import PublishError, PublishResult
 from smm.publishers.max_api import MaxPublisher, find_post_url
 from smm.publishers.browser import FBPublisher, VKPublisher
@@ -100,8 +100,7 @@ class SMMDaemon:
     # --- зависимости, создаются по требованию --------------------------------
 
     def adapter(self) -> Adapter:
-        provider = AnthropicApiProvider(self.cfg.secret("ANTHROPIC_API_KEY"), effort=self.cfg.llm.get("effort"),
-                                        workspace_id=os.environ.get("ANTHROPIC_WORKSPACE_ID") or None)
+        provider = build_provider(self.cfg)
         return Adapter(self.cfg, provider, resolve=web.resolve, reachable=web.reachable, copy_url=self.copy_url,
                        prefilters=False)
 
