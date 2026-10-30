@@ -37,6 +37,8 @@ _WORD_NUMS = {
     "тысяча": 1000, "миллион": 10**6, "миллиард": 10**9,
 }
 
+_ONE_OR_TWO_RE = re.compile(r"(?<![а-яё])(?:год|день|месяц|недел[юя]|час|минут[уа])\s?[-–—]\s?(?:два|две)(?![а-яё])", re.I)
+
 # Латинские слова, которые не считаются «новыми фактами».
 DEFAULT_WHITELIST = {
     "ai", "ii", "telegram", "max", "vk", "facebook", "threads", "instagram", "meta", "it",
@@ -79,6 +81,8 @@ def extract_numbers(text: str) -> set[float]:
     for word in re.findall(r"[а-яё]+", text.lower()):
         if word in _WORD_NUMS:
             nums.add(float(_WORD_NUMS[word]))
+    if _ONE_OR_TWO_RE.search(text):  # «год-два» — это те же «1–2 года»
+        nums.add(1.0)
     return nums
 
 

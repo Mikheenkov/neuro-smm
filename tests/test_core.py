@@ -101,6 +101,8 @@ def test_numbers_normalize():
     assert extract_numbers("позиции 250-500 т.р. и даже более") == extract_numbers("позиции 250–500 тысяч рублей")
     assert 300_000 in extract_numbers("зарплата 300 тр") and 300_000 in extract_numbers("300 т. руб.")
     assert 500 in extract_numbers("500 трактористов")
+    assert extract_numbers("буквально через год-два") == extract_numbers("буквально через 1–2 года")
+    assert 1 not in extract_numbers("сделали два проекта за год")
 
 
 def test_invariants_missing_new_and_dropped():
