@@ -126,7 +126,7 @@ class Adapter:
 
         def check(net: str, out: dict) -> ValidationResult:
             return validate(net, out, manifest, inv, self.cfg, mention_refs=mention_refs, allowed_extra_text=quoted_text,
-                            glossary=glossary, has_media=has_media)
+                            glossary=glossary, has_media=has_media, author_edit=bool(feedback))
 
         outputs = dict(data["networks"])
         result.outputs = outputs
@@ -143,7 +143,9 @@ class Adapter:
                                  "errors": result.networks[net].errors}
                 log.info("перегенерация %s, попытка %d: %s", net, attempt, result.networks[net].errors)
                 regen_prompt = build_editor_prompt(prompts, [net])
-                outputs[net] = self._call(result, regen_prompt.text + _REGEN_NOTE, regen_payload, regen_schema(net), "regen")["result"]
+                # При доработке перегенерация тоже помнит слова автора, иначе «чинит» его правку обратно.
+                note = (_FEEDBACK_NOTE if feedback else "") + _REGEN_NOTE
+                outputs[net] = self._call(result, regen_prompt.text + note, regen_payload, regen_schema(net), "regen")["result"]
                 result.networks[net] = check(net, outputs[net])
 
         # 5. Судья — по всем валидным версиям одним вызовом.
@@ -161,6 +163,8 @@ class Adapter:
             "quoted_sources": post.quoted_sources,
             "versions": {n: {"output": outputs[n], "rendered": result.networks[n].rendered} for n in nets},
         }
+        if "author_feedback" in payload:  # доработка: то, что автор велел убрать или изменить, — не ошибка версии
+            judge_payload["author_feedback"] = payload["author_feedback"]
         verdicts = {v["network"]: v for v in self._call(result, judge_prompt.text, judge_payload, JUDGE, "judge")["verdicts"]}
         for net in nets:
             v = verdicts.get(net) or {"network": net, "verdict": "block", "issues": [{"severity": "major", "text": "судья не вынес вердикт"}], "fix_instructions": None}
@@ -170,7 +174,8 @@ class Adapter:
                 regen_payload = {**payload, "networks": [net], "previous": outputs[net],
                                  "errors": [i["text"] for i in v["issues"]], "fix_instructions": v.get("fix_instructions")}
                 regen_prompt = build_editor_prompt(self.cfg.prompts_dir, [net])
-                outputs[net] = self._call(result, regen_prompt.text + _REGEN_NOTE, regen_payload, regen_schema(net), "regen")["result"]
+                note = (_FEEDBACK_NOTE if "author_feedback" in payload else "") + _REGEN_NOTE
+                outputs[net] = self._call(result, regen_prompt.text + note, regen_payload, regen_schema(net), "regen")["result"]
                 result.networks[net] = check(net, outputs[net])
                 majors = any(i["severity"] == "major" for i in v["issues"])
                 if result.networks[net].ok and (majors or was_block):

@@ -796,6 +796,10 @@ class SMMDaemon:
                 gen["errors"][net] = v.errors
         gen["cost"] = round(gen.get("cost", 0) + sum(r.cost_usd_est for r in result.llm_runs), 4)
         self.db.update_post(post_id, gen_json=dumps(gen))
+        if result.outputs.get(net) == previous:
+            why = "; ".join(v.errors) if v.errors else "модель вернула прежний текст"
+            await self.notify(f"Правку внести не получилось, версия не изменилась: {why}. "
+                              f"Попробуйте сформулировать иначе.")
         await self.show_version(post_id, net, gen)
 
     async def on_author_dm(self, msg: Message) -> None:

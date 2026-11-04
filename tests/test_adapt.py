@@ -122,3 +122,19 @@ def test_openrouter_errors_map_to_classes():
         with pytest.raises(LLMError) as exc:
             provider.generate("s", {}, {}, role="judge", model="m")
         assert exc.value.error_class == cls
+
+
+def test_author_edit_may_remove_facts_even_in_max():
+    # MAX не разрешает выбрасывать факты, но если автор сам попросил убрать абзац — это не ошибка.
+    cut = {**GOOD_MAX, "text_ir": 'Claude 5.5 подешевел. Подробности — <a ref="L1">на сайте Anthropic</a>.'}
+    fb = {"network": "max", "previous": GOOD_MAX, "notes": "убери цену"}
+    provider = FakeProvider({"max": cut}, {"max": "pass"})
+    result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), feedback=fb)
+    assert [r for r, _ in provider.calls] == ["editor", "judge"]
+    assert result.publishable()["max"]["text"].startswith("Claude 5.5 подешевел.")
+    assert provider.calls[1][1]["author_feedback"]["what_to_fix"] == "убери цену"
+
+    # Без просьбы автора та же версия бракуется: выброшены цифры.
+    provider = FakeProvider({"max": cut}, {"max": "pass"})
+    Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
+    assert provider.calls[1][0] == "regen"

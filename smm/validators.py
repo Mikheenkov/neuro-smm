@@ -86,6 +86,7 @@ def validate(
     allowed_extra_text: str = "",
     glossary: dict | None = None,
     has_media: bool = False,
+    author_edit: bool = False,
 ) -> ValidationResult:
     res = ValidationResult(network)
     spec = cfg.networks.get(network, {})
@@ -198,7 +199,8 @@ def validate(
 
     _check_links_kept(res, network, out, manifest, spec)
     chk = check_invariants(inv, full_plain, dropped, allowed_extra_text=allowed_extra_text, glossary=glossary)
-    if not spec.get("check_missing_facts", True):  # Threads берёт только ключевые мысли — пропуски норма
+    # Threads берёт только ключевые мысли — пропуски норма. Автор сам попросил убрать часть текста — тоже.
+    if not spec.get("check_missing_facts", True) or author_edit:
         chk.missing, chk.dropped_ratio = [], 0.0
     for e in chk.errors(spec.get("max_dropped_ratio", 1.0)):
         res.err(e)
