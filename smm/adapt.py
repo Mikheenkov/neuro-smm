@@ -1,5 +1,5 @@
 """Адаптация одного поста (§1.4–1.5): фильтры → манифест ссылок → редактор →
-валидаторы и инварианты → перегенерация → судья. Публикации здесь нет."""
+круги «проверки кода → судья → переписывание» до готовой версии. Публикации здесь нет."""
 
 from __future__ import annotations
 
@@ -133,64 +133,73 @@ class Adapter:
         for net in networks:
             result.networks[net] = check(net, outputs[net])
 
-        # 4. Перегенерация сетей, не прошедших валидаторы.
-        max_attempts = self.cfg.llm.get("max_regen_attempts", 2)
-        for net in networks:
-            attempt = 0
-            while not result.networks[net].ok and attempt < max_attempts:
-                attempt += 1
-                regen_payload = {**payload, "networks": [net], "previous": outputs[net],
-                                 "errors": result.networks[net].errors}
-                log.info("перегенерация %s, попытка %d: %s", net, attempt, result.networks[net].errors)
-                regen_prompt = build_editor_prompt(prompts, [net])
-                # При доработке перегенерация тоже помнит слова автора, иначе «чинит» его правку обратно.
-                note = (_FEEDBACK_NOTE if feedback else "") + _REGEN_NOTE
-                outputs[net] = self._call(result, regen_prompt.text + note, regen_payload, regen_schema(net), "regen")["result"]
-                result.networks[net] = check(net, outputs[net])
-
-        # 5. Судья — по всем валидным версиям одним вызовом.
-        to_judge = [n for n in networks if result.networks[n].ok and not result.networks[n].skipped]
-        if to_judge:
-            self._judge(result, post, ir, inv, manifest, to_judge, outputs, payload, check)
-        return result
-
-    def _judge(self, result, post, ir, inv, manifest, nets, outputs, payload, check) -> None:
-        judge_prompt = build_judge_prompt(self.cfg.prompts_dir, nets)
-        judge_payload = {
+        # 4. Круги доработки (решение автора 05.11.2026): сеть не пропускается никогда. Не прошла проверку
+        # кода или судья недоволен — версия уходит на переписывание с замечаниями, и так до вердикта pass.
+        # Круги ограничены max_rounds; после них публикуется последняя технически годная версия,
+        # а оставшиеся замечания судьи уходят автору в отчёт.
+        judge_prompt = build_judge_prompt(prompts, networks)
+        judge_base = {
             "source_ir": ir.ir,
             "invariants": inv.as_list(),
             "links": [m.for_editor() for m in manifest],
             "quoted_sources": post.quoted_sources,
-            "versions": {n: {"output": outputs[n], "rendered": result.networks[n].rendered} for n in nets},
         }
-        if "author_feedback" in payload:  # доработка: то, что автор велел убрать или изменить, — не ошибка версии
-            judge_payload["author_feedback"] = payload["author_feedback"]
-        verdicts = {v["network"]: v for v in self._call(result, judge_prompt.text, judge_payload, JUDGE, "judge")["verdicts"]}
-        for net in nets:
-            v = verdicts.get(net) or {"network": net, "verdict": "block", "issues": [{"severity": "major", "text": "судья не вынес вердикт"}], "fix_instructions": None}
-            # block с указаниями судьи — тоже одна попытка исправить, но публикуем только после повторного суда.
-            was_block = v["verdict"] == "block" and bool(v.get("fix_instructions"))
-            if v["verdict"] == "fix" or was_block:
-                regen_payload = {**payload, "networks": [net], "previous": outputs[net],
-                                 "errors": [i["text"] for i in v["issues"]], "fix_instructions": v.get("fix_instructions")}
-                regen_prompt = build_editor_prompt(self.cfg.prompts_dir, [net])
-                note = (_FEEDBACK_NOTE if "author_feedback" in payload else "") + _REGEN_NOTE
-                outputs[net] = self._call(result, regen_prompt.text + note, regen_payload, regen_schema(net), "regen")["result"]
+        if feedback:  # доработка: то, что автор велел убрать или изменить, — не ошибка версии
+            judge_base["author_feedback"] = payload["author_feedback"]
+        remarks: dict[str, dict] = {}  # сеть → последний вердикт судьи, если он не pass
+        todo = list(networks)
+        rounds = self.cfg.llm.get("max_rounds", 4)
+        for rnd in range(1, rounds + 1):
+            for net in todo:
+                v = result.networks[net]
+                errors = list(v.errors)
+                if v.skipped:
+                    errors.append(f"пропускать площадку нельзя ({out_reason(outputs[net])}): напиши версию для неё")
+                judged = remarks.get(net)
+                if judged:
+                    errors += [i["text"] for i in judged.get("issues", [])] or [
+                        f"судья вернул версию на доработку («{judged['verdict']}»)"]
+                if not errors:
+                    continue
+                log.info("доработка %s, круг %d: %s", net, rnd, errors)
+                regen_payload = {**payload, "networks": [net], "previous": outputs[net], "errors": errors,
+                                 "fix_instructions": (judged or {}).get("fix_instructions")}
+                # При доработке по словам автора переписывание тоже их помнит, иначе «чинит» правку обратно.
+                note = (_FEEDBACK_NOTE if feedback else "") + _REGEN_NOTE
+                outputs[net] = self._call(result, build_editor_prompt(prompts, [net]).text + note, regen_payload,
+                                          regen_schema(net), "regen")["result"]
                 result.networks[net] = check(net, outputs[net])
-                majors = any(i["severity"] == "major" for i in v["issues"])
-                if result.networks[net].ok and (majors or was_block):
-                    again = self._call(result, judge_prompt.text,
-                                       {**judge_payload, "versions": {net: {"output": outputs[net], "rendered": result.networks[net].rendered}}},
-                                       JUDGE, "judge")["verdicts"]
-                    v = next((x for x in again if x["network"] == net), v)
-                    if v["verdict"] == "fix":
-                        # После исправления осталась только «доводка» — публикуем: стоп только по block.
-                        v = {**v, "verdict": "pass"}
-                elif result.networks[net].ok:
-                    v = {**v, "verdict": "pass"}
-                else:
-                    v = {**v, "verdict": "block"}
-            result.verdicts[net] = v
+                remarks.pop(net, None)
+            ready = [n for n in todo if result.networks[n].ok and not result.networks[n].skipped]
+            if ready:
+                versions = {n: {"output": outputs[n], "rendered": result.networks[n].rendered,
+                                "auto_check_notes": result.networks[n].notes} for n in ready}
+                answer = self._call(result, judge_prompt.text, {**judge_base, "versions": versions}, JUDGE, "judge")
+                verdicts = {v["network"]: v for v in answer["verdicts"]}
+                for net in ready:
+                    v = verdicts.get(net) or {"network": net, "verdict": "fix", "fix_instructions": None,
+                                              "issues": [{"severity": "major", "text": "судья не вынес вердикт"}]}
+                    if v["verdict"] == "pass":
+                        result.verdicts[net] = v
+                        todo.remove(net)
+                    else:
+                        remarks[net] = v
+            if not todo:
+                break
+
+        for net in todo:
+            if result.networks[net].ok and not result.networks[net].skipped:
+                # Круги кончились, судья не до конца доволен: публикуем, замечания — автору в отчёт.
+                v = remarks.get(net) or {"network": net, "issues": [], "fix_instructions": None}
+                result.verdicts[net] = {**v, "verdict": "pass", "unresolved": True}
+            else:
+                # Технически опубликовать нельзя (например, длина больше лимита сети) — причина в errors.
+                result.verdicts[net] = {"network": net, "verdict": "block", "issues": [], "fix_instructions": None}
+        return result
+
+
+def out_reason(out: dict) -> str:
+    return out.get("skip_reason") or "без причины"
 
 
 EDITOR_BATCH = 2  # сетей в одном вызове редактора
@@ -206,7 +215,7 @@ _REGEN_NOTE = """
 
 # Перегенерация
 
-Ты уже писал версию для этой площадки (`previous`), но она не прошла проверку. Исправь ошибки из `errors` (и `fix_instructions`, если есть), сохранив всё остальное. Верни объект `{"network": ..., "result": ...}`."""
+Ты уже писал версию для этой площадки (`previous`), но она не прошла проверку. Исправь замечания из `errors` (и `fix_instructions`, если есть), сохранив всё остальное. Пропускать площадку нельзя: версия нужна обязательно. Верни объект `{"network": ..., "result": ...}`."""
 
 
 def safe_adapt(adapter: Adapter, post: PostInput, networks: list[str] | None = None, *,

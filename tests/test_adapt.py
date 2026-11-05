@@ -51,7 +51,9 @@ def test_adapt_regenerates_invalid_network_and_publishes_after_judge():
     roles = [r for r, _ in provider.calls]
     assert roles == ["editor", "regen", "judge"]
     regen_errors = provider.calls[1][1]["errors"]
-    assert any("Telegram" in e for e in regen_errors) and any("«5»" in e for e in regen_errors)
+    assert any("Telegram" in e for e in regen_errors)
+    # Выдуманная цифра — не повод перегенерировать: это подозрение, его видит судья.
+    assert not any("«5»" in e for e in regen_errors)
 
     # Модель видит домен (чтобы назвать сайт словами), но не URL.
     assert "https://" not in str(provider.calls[0][1]["links"]) and "/pricing" not in str(provider.calls[0][1])
@@ -69,59 +71,29 @@ def test_ad_post_never_reaches_llm():
     assert result.status == "skipped" and provider.calls == []
 
 
-def test_judge_block_is_not_published():
+def test_judge_remarks_send_version_back_until_pass():
+    provider = FakeProvider({"max": GOOD_MAX}, {"max": ["block", "fix", "pass"]}, fix_instructions="убери выдуманное «в месяц»")
+    result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
+    assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge", "regen", "judge"]
+    assert provider.calls[2][1]["fix_instructions"] == "убери выдуманное «в месяц»"
+    assert "max" in result.publishable() and not result.verdicts["max"].get("unresolved")
+
+
+def test_after_all_rounds_version_is_published_with_remarks():
     provider = FakeProvider({"max": GOOD_MAX}, {"max": "block"})
     result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
-    assert result.publishable() == {}
+    rounds = CFG.llm.get("max_rounds", 4)
+    assert [r for r, _ in provider.calls].count("judge") == rounds
+    assert "max" in result.publishable() and result.verdicts["max"]["unresolved"]
 
 
-def test_judge_block_with_instructions_is_fixed_and_rejudged():
-    provider = FakeProvider({"max": GOOD_MAX}, {"max": ["block", "pass"]}, fix_instructions="убери выдуманное «в месяц»")
+def test_editor_skip_is_reworked_not_accepted():
+    skipped = {**GOOD_MAX, "skip": True, "skip_reason": "пост только для Telegram"}
+    provider = FakeProvider({"max": skipped}, {"max": "pass"})
     result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
-    assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge"]
-    assert provider.calls[2][1]["fix_instructions"] == "убери выдуманное «в месяц»"
+    assert [r for r, _ in provider.calls] == ["editor", "regen", "judge"]
+    assert any("пропускать площадку нельзя" in e for e in provider.calls[1][1]["errors"])
     assert "max" in result.publishable()
-
-
-def test_judge_block_twice_is_not_published():
-    provider = FakeProvider({"max": GOOD_MAX}, {"max": ["block", "block"]}, fix_instructions="убери выдуманное")
-    result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
-    assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge"]
-    assert result.publishable() == {}
-
-
-def _openrouter(handler):
-    import httpx
-    from smm.llm.openrouter import OpenRouterProvider
-    return OpenRouterProvider("k", transport=httpx.MockTransport(handler))
-
-
-def test_openrouter_returns_parsed_json_and_real_cost():
-    import httpx, json
-
-    def handler(request):
-        body = json.loads(request.content)
-        assert body["response_format"]["json_schema"]["schema"] == {"type": "object"}
-        return httpx.Response(200, json={"model": "anthropic/claude-opus-5.5", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.01},
-                                         "choices": [{"finish_reason": "stop", "message": {"content": '{"a": 1}'}}]})
-
-    res = _openrouter(handler).generate("s", {"p": 1}, {"type": "object"}, role="editor", model="anthropic/claude-opus-5.5")
-    assert res.data == {"a": 1} and res.cost_usd_est == 0.01 and res.input_tokens == 10
-
-
-def test_openrouter_errors_map_to_classes():
-    import httpx, pytest
-    from smm.llm.base import LLMError
-
-    cases = [(402, {"error": {"code": 402, "message": "no credits"}}, "auth"),
-             (429, {"error": {"code": 429, "message": "slow"}}, "limit"),
-             (502, {"error": {"code": 502, "message": "down"}}, "overloaded"),
-             (200, {"error": {"code": 503, "message": "down"}}, "overloaded")]
-    for status, payload, cls in cases:
-        provider = _openrouter(lambda r, s=status, p=payload: httpx.Response(s, json=p))
-        with pytest.raises(LLMError) as exc:
-            provider.generate("s", {}, {}, role="judge", model="m")
-        assert exc.value.error_class == cls
 
 
 def test_author_edit_may_remove_facts_even_in_max():
@@ -134,7 +106,13 @@ def test_author_edit_may_remove_facts_even_in_max():
     assert result.publishable()["max"]["text"].startswith("Claude 5.5 подешевел.")
     assert provider.calls[1][1]["author_feedback"]["what_to_fix"] == "убери цену"
 
-    # Без просьбы автора та же версия бракуется: выброшены цифры.
-    provider = FakeProvider({"max": cut}, {"max": "pass"})
-    Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
-    assert provider.calls[1][0] == "regen"
+
+
+def test_fact_and_link_suspicions_go_to_judge_not_regen():
+    invented = {**GOOD_MAX, "text_ir": "Claude 5.5 подешевел до $5.", "buttons": []}
+    provider = FakeProvider({"max": invented}, {"max": ["block", "pass"]})
+    result = Adapter(CFG, provider).adapt(PostInput(TEXT, ENTITIES), ["max"])
+    assert [r for r, _ in provider.calls] == ["editor", "judge", "regen", "judge"]  # перегенерацию попросил судья
+    notes = provider.calls[1][1]["versions"]["max"]["auto_check_notes"]
+    assert any("«5»" in n for n in notes) and any("пропала ссылка L1" in n for n in notes)
+    assert "max" in result.publishable()

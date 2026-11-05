@@ -26,7 +26,8 @@ _MULT = [
 ]
 _NUM = r"(?<![\w.,])(\d{1,3}(?:[   ]\d{3})+|\d+(?:[.,]\d+)?)"
 _NUM_RE = re.compile(_NUM + r"(?:\s?(" + "|".join(m for m, _ in _MULT) + r"))?", re.I)
-_DATE_NUM_RE = re.compile(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?(?![\d.])")
+# Точка после даты — конец предложения («до 12.11.»), а не часть числа.
+_DATE_NUM_RE = re.compile(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?(?!\d|\.\d)")
 _DATE_WORD_RE = re.compile(r"(?<!\d)(\d{1,2})\s+" + _MONTH_RE, re.I)
 _LATIN_RE = re.compile(r"(?<![\w-])[A-Za-z][A-Za-z0-9]*(?:[.\-+][A-Za-z0-9]+)*")
 

@@ -575,6 +575,9 @@ class SMMDaemon:
                     chain = f" (ветка из {parts})" if parts > 1 else ""
                     lines.append(f"✓ {name}{chain}: {p['remote_url'] or 'опубликован, ссылки нет'}")
                 lines += [f"   ⚠ {w}" for w in extra.get("warnings", [])]
+                verdict = gen.get("verdicts", {}).get(p["network"], {})
+                if verdict.get("unresolved"):
+                    lines += [f"   ⚠ судья после всех доработок: {i['text']}" for i in verdict.get("issues", [])][:3]
             elif p["state"] == "skipped":
                 lines.append(f"– {name}: пропущен — {p['error']}")
             else:

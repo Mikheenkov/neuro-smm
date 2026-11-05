@@ -5,14 +5,14 @@
 providers: [anthropic_api]
 
 models:
-  editor: claude-sonnet-5-5
-  regen: claude-sonnet-5-5
-  judge: claude-sonnet-5-5     # решение автора 30.10.2026: все роли на Sonnet, судья на той же модели, что и редактор
+  editor: claude-opus-5-5
+  regen: claude-opus-5-5
+  judge: claude-sonnet-5-5     # судья всегда на другой модели, чем редактор
 
 effort:
   editor: medium
   regen: medium
   judge: medium
 
-max_regen_attempts: 2           # перегенераций одной сети после ошибок валидатора
+max_rounds: 4                   # кругов «переписать → проверить → судья» на сеть; потом публикуем с замечаниями
 monthly_budget_usd: 55          # мягкий потолок ≈ 50 € в месяц (система считает в долларах)

@@ -1,5 +1,8 @@
-"""Валидаторы версий по сетям (§1.5, §3). Рендерят ответ редактора в готовый payload
-и возвращают список ошибок; при ошибках сеть перегенерируется."""
+"""Валидаторы версий по сетям (§1.5, §3). Рендерят ответ редактора в готовый payload.
+
+Ошибки (`errors`) — то, что нельзя публиковать: лимиты сети, битая разметка, правила автора (Telegram, VPN).
+При ошибках сеть перегенерируется. Подозрения (`notes`) — выдуманные числа и названия, потерянные ссылки:
+код их только подсказывает судье, а решает судья, глядя на исходник."""
 
 from __future__ import annotations
 
@@ -26,11 +29,15 @@ class ValidationResult:
     skipped: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     rendered: dict = field(default_factory=dict)
 
     def err(self, msg: str) -> None:
         self.ok = False
         self.errors.append(msg)
+
+    def note(self, msg: str) -> None:
+        self.notes.append(msg)
 
 
 def threads_len(text: str) -> int:
@@ -190,8 +197,8 @@ def validate(
             urls = re.findall(r"https?://\S+", text)
             if any(host_of(u) == "t.me" for u in urls):
                 res.err(f"{network}: ссылка на t.me запрещена")
-            limit = spec.get("max_external_urls", 1)
-            if len(_external_urls(urls)) > limit:
+            limit = spec.get("max_external_urls")  # по умолчанию ссылок сколько угодно, как у автора
+            if limit and len(_external_urls(urls)) > limit:
                 res.err(f"{network}: внешних ссылок {len(_external_urls(urls))}, максимум {limit}")
             if len(text) > spec.get("max_len", 4000):
                 res.err(f"{network}: {len(text)} символов, лимит {spec.get('max_len', 4000)}")
@@ -199,19 +206,21 @@ def validate(
 
     _check_links_kept(res, network, out, manifest, spec)
     chk = check_invariants(inv, full_plain, dropped, allowed_extra_text=allowed_extra_text, glossary=glossary)
-    # Threads берёт только ключевые мысли — пропуски норма. Автор сам попросил убрать часть текста — тоже.
-    if not spec.get("check_missing_facts", True) or author_edit:
+    # Пропуски фактов — нормальная адаптация (решение автора 05.11.2026); включается check_missing_facts.
+    # Автор сам попросил убрать часть текста — тоже не ошибка.
+    if not spec.get("check_missing_facts", False) or author_edit:
         chk.missing, chk.dropped_ratio = [], 0.0
     for e in chk.errors(spec.get("max_dropped_ratio", 1.0)):
-        res.err(e)
+        res.note(e)
     return res
 
 
 def _check_links_kept(res: ValidationResult, network: str, out: dict, manifest: list, spec: dict) -> None:
     """Ссылки — важная часть поста: всё, что разрешено оставить (keep/map), должно остаться в тексте.
-    Для MAX засчитывается и кнопка. Если сеть ограничивает число ссылок, требуем не больше лимита."""
+    Для MAX засчитывается и кнопка. Ссылки с одним адресом считаются одной (автор мог разбить анкор
+    на «🌹 » и «Вечеринка»). Потеря — подсказка судье, а не отказ. Threads берёт отдельные мысли — там не проверяем."""
     kept = [ml for ml in manifest if ml.decisions.get(network, {}).get("action") in ("keep", "map")]
-    if not kept:
+    if not kept or network == "threads":
         return
     irs = list(out.get("parts") or []) if network == "threads" else [out.get("text_ir") or ""]
     if network == "threads" and out.get("text_attachment_ir"):
@@ -224,10 +233,15 @@ def _check_links_kept(res: ValidationResult, network: str, out: dict, manifest: 
             return  # ошибку разметки уже сообщили выше
     if network == "max":
         present.update(b.get("ref") for b in out.get("buttons") or [])
-    missing = [ml for ml in kept if ml.ref not in present]
+    url = {ml.ref: ml.decisions[network].get("target_url") or ml.ref for ml in kept}
+    present_urls = {url[r] for r in present if r in url}
+    missing, seen = [], set()
+    for ml in kept:
+        if url[ml.ref] not in present_urls and url[ml.ref] not in seen:
+            seen.add(url[ml.ref])
+            missing.append(ml)
     limit = spec.get("max_external_urls")
-    required = min(len(kept), limit) if limit else len(kept)
-    if len(kept) - len(missing) < required:
+    required = min(len(seen | present_urls), limit) if limit else len(seen | present_urls)
+    if len(present_urls) < required:
         for ml in missing:
-            res.err(f"пропала ссылка {ml.ref} («{ml.anchor}»): ссылки — важная часть поста, "
-                    f"оставь её в тексте через <a ref=\"{ml.ref}\">")
+            res.note(f"пропала ссылка {ml.ref} («{ml.anchor.strip()}»)")

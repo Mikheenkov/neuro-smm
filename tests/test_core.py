@@ -150,10 +150,39 @@ def test_validator_requires_kept_links_in_text():
     inv = build_invariants("компания 40dB")
     out = {"skip": False, "skip_reason": None, "parts": ["Компания 40dB слушает людей."], "text_attachment_ir": None,
            "link_attachment_ref": "L1", "topic_tags": ["Нейминг"], "dropped_facts": []}
-    res = validate("threads", out, m, inv, CFG)
-    assert any("пропала ссылка L1" in e for e in res.errors)  # карточка не заменяет ссылку в тексте
-    out["parts"] = ['<a ref="L1">Компания 40dB</a> слушает людей.']
-    assert validate("threads", out, m, inv, CFG).ok
+    assert validate("threads", out, m, inv, CFG).notes == []  # Threads — отдельные мысли, ссылки не обязательны
+    vk = {"skip": False, "skip_reason": None, "text_ir": "Компания 40dB слушает людей.", "hashtags": [], "dropped_facts": []}
+    res = validate("vk", vk, m, inv, CFG)
+    assert res.ok and any("пропала ссылка L1" in n for n in res.notes)  # подсказка судье, не отказ
+    vk["text_ir"] = '<a ref="L1">Компания 40dB</a> слушает людей.'
+    assert validate("vk", vk, m, inv, CFG).notes == []
+
+
+def test_validator_counts_links_to_same_url_once_and_has_no_link_cap():
+    from smm.invariants import build_invariants
+    from smm.validators import validate
+    src = "🌹 Вечеринка и бранчи, а ещё сайт и блог и чат"
+    ents = [{"type": "text_link", "offset": 0, "length": 2, "url": "https://a.com/party"},
+            {"type": "text_link", "offset": 3, "length": 9, "url": "https://a.com/party"}]
+    ents += [{"type": "text_link", "offset": src.index(w), "length": len(w), "url": f"https://{w}.com/"}
+             for w in ("бранчи", "сайт", "блог", "чат")]
+    r = entities_to_ir(src, ents)
+    m = build_manifest(r.links, CFG)
+    inv = build_invariants(src)
+    text = '<a ref="L2">Вечеринка</a> и <a ref="L3">бранчи</a>, а ещё <a ref="L4">сайт</a> и <a ref="L5">блог</a> и <a ref="L6">чат</a>'
+    res = validate("vk", {"skip": False, "skip_reason": None, "text_ir": text, "hashtags": [], "dropped_facts": []}, m, inv, CFG)
+    assert res.ok and res.notes == [], (res.errors, res.notes)
+
+
+def test_dates_survive_sentence_end_and_missing_facts_are_not_checked():
+    from smm.invariants import build_invariants
+    from smm.validators import validate
+    src = "Бранчи R-Founders, 9–12.11\nВечеринка 11.11 и 300 событий"
+    inv = build_invariants(src)
+    out = {"skip": False, "skip_reason": None, "hashtags": [], "dropped_facts": [],
+           "text_ir": "Бранчи R-Founders идут 9–12.11. Приходите!"}
+    res = validate("fb", out, [], inv, CFG)
+    assert res.ok and res.notes == [], res.notes  # «12.11.» — дата; пропуск 11.11 и 300 — не ошибка
 
 
 def test_max_allows_bare_url_anchor_of_kept_link_only():
