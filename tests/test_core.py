@@ -199,3 +199,21 @@ def test_max_allows_bare_url_anchor_of_kept_link_only():
     assert '<a href="https://40db.es">https://40db.es/</a>' in res.rendered["text"]
     bad = {**ok, "text_ir": 'сайт: <a ref="L1">https://40db.es/</a> и insta <a ref="L2">https://instagram.com/x</a>'}
     assert any("URL или домен" in e for e in validate("max", bad, m, inv, CFG).errors)  # Meta-адрес в MAX нельзя
+
+
+def test_story_photo_rotation_prefers_unused(tmp_path):
+    from smm.stories import pick_photo
+    for n in ("a.jpg", "b.png", "c.webp", "notes.txt"):
+        (tmp_path / n).write_bytes(b"x")
+    assert pick_photo(tmp_path, ["a.jpg", "b.png"]).name == "c.webp"
+    assert pick_photo(tmp_path, ["b.png", "c.webp", "a.jpg"]).name == "b.png"  # дольше всех не использовалось
+
+
+def test_story_card_text_is_also_caption_and_has_no_telegram():
+    from smm.config import load_config
+    from smm.validators import validate
+    cfg = load_config()
+    ok = validate("story", {"card_title": "Как я перестал нанимать звёзд"}, [], None, cfg)
+    assert ok.ok and ok.rendered["caption"] == "Как я перестал нанимать звёзд"
+    bad = validate("story", {"card_title": "Новый пост в моём телеграм-канале " + "x" * 120}, [], None, cfg)
+    assert not bad.ok and len(bad.errors) == 2

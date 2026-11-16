@@ -42,10 +42,25 @@ vk:
   max_hashtags: 2
   max_images: 10
 
-story:
-  enabled: false                # фаза 2, MTProto
-  audience: tg
-  card_title_max: 90
-  caption_max: 2048             # у автора Premium; без Premium — 200
+story:                          # текст карточки сторис: пишет редактор один раз на все площадки ниже
+  enabled: false                # сама по себе не публикуется; включаются story_tg / story_vk / story_fb
+  audience: ru
+  card_title_max: 120
+
+# Сторис по площадкам. Каждая ведёт на этот пост в той же сети, поэтому выходит после него.
+story_tg:                       # сторис Telegram-канала, Telethon от аккаунта автора; по тапу — пост в канале
+  enabled: true
+  publish: true
+  sticker: "Ссылка на пост"     # нарисованный стикер, поверх него — кликабельная зона на пост
+story_vk:                       # сторис личной страницы VK со стикером-ссылкой на пост в VK
+  enabled: true
+  publish: false                # репетиция: снимок экрана вместо публикации, пока автор не посмотрит
+  after: vk                     # без опубликованного поста в VK сторис не на что вести
+  sticker: "Ссылка на пост"     # текст настоящего стикера-ссылки VK
+story_fb:                       # сторис профиля Facebook (дальше — в Instagram через Accounts Center); ссылки нет
+  enabled: true
+  publish: false
+  after: fb
+  sticker: "Новый пост в профиле"  # плашка без значка ссылки: кликабельной ссылки в Facebook нет
 
 meta_footnote: true             # сноска про Meta в MAX и VK при упоминании Instagram/Facebook

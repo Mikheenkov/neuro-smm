@@ -49,7 +49,7 @@ def daemon(tmp_path, monkeypatch):
     async def send_card(post_id, chat_id=None):
         d.cards.append(f"Пост {d.db.post(post_id)['tg_msg_id']}")
 
-    async def publish_one(net, rendered, media, done):
+    async def publish_one(net, rendered, media, done, **kw):
         d.published.append((net, rendered))
         if net == "max" and getattr(d, "max_fails", False):
             raise PublishError("MAX упал", retryable=False)
@@ -184,3 +184,27 @@ async def test_threads_token_refreshed_weekly_and_stored_in_db(daemon, monkeypat
     assert calls == ["old"] and daemon.threads_token() == "new-token"
     await daemon.maybe_refresh_threads_token()  # повторно в тот же день — не продлеваем
     assert calls == ["old"]
+
+
+STORY = {"skip": False, "skip_reason": None, "card_title": "Почему Claude вдруг подешевел и что это меняет"}
+
+
+async def test_story_goes_to_each_platform_after_its_post(daemon):
+    daemon.networks = lambda: ["threads", "max", "story_tg", "story_vk"]
+    daemon.adapter = lambda: Adapter(daemon.cfg, FakeProvider({"max": GOOD_MAX, "threads": THREADS, "story": STORY},
+                                                              {"max": "pass", "threads": "pass", "story": "pass"}),
+                                     prefilters=False)
+    await daemon.on_channel_post(channel_msg(80, TEXT, ENTITIES))
+    post = daemon.db.post_by_msg(CHANNEL, 80)
+    await daemon.queue(post["id"])
+    await daemon.run_post(post["id"])
+    # Текст сторис пишется один раз; Telegram получает его и как подпись.
+    assert [n for n, _ in daemon.published] == ["threads", "max", "story_tg"]
+    assert daemon.published[-1][1]["caption"] == STORY["card_title"]
+    # VK-поста нет — сторис VK не на что вести.
+    assert "пост в VK не опубликован" in daemon.db.publication(post["id"], "story_vk")["error"]
+
+    # Кнопка «Опубликовать в Сторис» — это все площадки сторис, без лишней «сети» story в базе.
+    await daemon.queue(post["id"], ["story"])
+    assert json.loads(daemon.db.get(f"queue_nets:{post['id']}")) == ["story_tg", "story_vk"]
+    assert daemon.db.publication(post["id"], "story") is None

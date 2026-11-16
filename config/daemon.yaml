@@ -4,6 +4,6 @@
 edit_debounce_seconds: 30   # если пост только что правили, ждём, чтобы взять окончательную версию
 tick_seconds: 10
 
-publish_order: [threads, max, fb, vk, story]
+publish_order: [threads, max, fb, vk, story_tg, story_vk, story_fb]
 max_attempts: 3             # попыток публикации на сеть за одну команду
 retry_delays_seconds: [30, 120]

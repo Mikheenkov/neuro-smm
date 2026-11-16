@@ -29,15 +29,17 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 
 from smm import web
 from smm.adapt import AdaptResult, Adapter, PostInput, safe_adapt
-from smm.config import Config, load_config
+from smm.config import Config, llm_network, load_config
 from smm.db import DB, dumps, now_iso, parse_iso
 from smm.ir import content_hash, entities_to_ir
 from smm.links import classify, normalize_url
 from smm.llm import build_provider
 from smm.publishers import PublishError, PublishResult
 from smm.publishers.max_api import MaxPublisher, find_post_url
-from smm.publishers.browser import FBPublisher, VKPublisher
+from smm.publishers.browser import FBPublisher, FBStoryPublisher, VKPublisher, VKStoryPublisher, run_in_browser
+from smm.publishers.tg_story import TGStoryPublisher
 from smm.publishers.threads import ThreadsPublisher
+from smm.stories import CTA_BOX, VK_STICKER_BOX, StoryCards, StoryError
 
 log = logging.getLogger("smm")
 
@@ -46,7 +48,8 @@ BTN_RESTART = "🔄 Перезапустить менеджер"
 MENU = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_LAST), KeyboardButton(text=BTN_RESTART)]],
                            resize_keyboard=True, is_persistent=True)
 
-NET_TITLES = {"threads": "Threads", "max": "MAX", "fb": "Facebook", "vk": "VK", "story": "Stories"}
+NET_TITLES = {"threads": "Threads", "max": "MAX", "fb": "Facebook", "vk": "VK", "story": "Сторис",
+              "story_tg": "Сторис Telegram", "story_vk": "Сторис VK", "story_fb": "Сторис Facebook"}
 
 
 def _utc(s: str) -> datetime:
@@ -192,6 +195,37 @@ class SMMDaemon:
         """publish: false в networks.yaml — сеть пока в режиме репетиции: заполнить, снять экран, не публиковать."""
         return (self.cfg.networks.get(net) or {}).get("publish", True)
 
+    def story_cards(self) -> StoryCards:
+        """Фотобанк — data/photobank на сервере (не в git), иначе photobank/ в корне проекта."""
+        library = self.cfg.data_dir / "photobank"
+        if not library.exists():
+            library = self.cfg.root / "photobank"
+        return StoryCards(library, self.cfg.data_dir / "stories", self.db)
+
+    def tg_story(self) -> TGStoryPublisher:
+        own = (self.cfg.equivalents.get("own_tg_channel") or {}).get("username")
+        spec = self.cfg.networks.get("story_tg") or {}
+        return TGStoryPublisher(int(self.cfg.secret("TG_API_ID")), self.cfg.secret("TG_API_HASH"),
+                                self.cfg.data_dir / "tg_story.session", own, pinned=bool(spec.get("pinned", False)))
+
+    def story_nets(self) -> list[str]:
+        return [n for n in self.networks() if n.startswith("story_")]
+
+    async def story_card(self, post_id: int, net: str, rendered: dict) -> Path:
+        """Карточка для площадки: фото общее на пост, стикер-ссылка — по возможностям площадки."""
+        spec = self.cfg.networks.get(net) or {}
+        cards = self.story_cards()
+        icon = True
+        if net == "story_vk":
+            sticker = None  # настоящий стикер-ссылку VK ставим на это место в редакторе VK
+        elif net == "story_fb":
+            sticker, icon = spec.get("sticker") or "Новый пост в профиле", False  # ссылки в Facebook нет
+        else:
+            sticker = spec.get("sticker") or "Ссылка на пост"
+        variant = net.removeprefix("story_")
+        return await run_in_browser(lambda page: cards.card(page, post_id, rendered["card_title"], sticker, variant,
+                                                            link_icon=icon))
+
     def max(self) -> MaxPublisher:
         import os
         chat = os.environ.get("MAX_CHANNEL_ID")
@@ -215,8 +249,13 @@ class SMMDaemon:
         return post["gen_hash"] == self.gen_key(post)
 
     def networks(self) -> list[str]:
+        """Куда публикуем (сторис — отдельно по каждой площадке: story_tg, story_vk, …)."""
         enabled = set(self.cfg.enabled_networks())
         return [n for n in self.d.get("publish_order", []) if n in enabled]
+
+    def llm_networks(self) -> list[str]:
+        """Для каких сетей редактор пишет текст: у всех сторис он один — `story`."""
+        return self.cfg.llm_networks(self.networks())
 
     # --- приём постов --------------------------------------------------------
 
@@ -337,6 +376,8 @@ class SMMDaemon:
 
     async def queue(self, post_id: int, nets: list[str] | None = None) -> None:
         """Команда автора: опубликовать (во все сети или только в nets). Невышедшие сети пробуем снова."""
+        if nets and "story" in nets:  # кнопка «Опубликовать» у сторис — это сторис на всех площадках
+            nets = [n for n in nets if n != "story"] + self.story_nets()
         for pub in self.db.publications(post_id):
             if pub["state"] != "published" and (nets is None or pub["network"] in nets):
                 self.db.upsert_publication(post_id, pub["network"], state="pending", error=None)
@@ -409,7 +450,7 @@ class SMMDaemon:
         if self.db.month_cost() >= self.cfg.llm.get("monthly_budget_usd", 12):
             result = AdaptResult(status="held", reason="исчерпан месячный бюджет API")
         else:
-            result = await asyncio.to_thread(safe_adapt, self.adapter(), inp, self.networks())
+            result = await asyncio.to_thread(safe_adapt, self.adapter(), inp, self.llm_networks())
         for run in result.llm_runs:
             self.db.log_llm(post_id, run)
         gen = {
@@ -469,7 +510,10 @@ class SMMDaemon:
             if f.is_file() and time.time() - f.stat().st_mtime > max_age_hours * 3600:
                 f.unlink(missing_ok=True)
 
-    async def _publish_one(self, net: str, rendered: dict, media: list[dict], done: dict) -> PublishResult:
+    async def _publish_one(self, net: str, rendered: dict, media: list[dict], done: dict, *,
+                           post_id: int | None = None) -> PublishResult:
+        if net.startswith("story_"):
+            return await self._publish_story(net, rendered, post_id)
         if net == "threads":
             photos = await self._download(media, "photo", max_mb=8)
             image_urls = self._public_urls(photos[:20])
@@ -494,6 +538,47 @@ class SMMDaemon:
             return res
         raise PublishError(f"публикация в {net} ещё не реализована", retryable=False)
 
+    def story_blocker(self, post_id: int, net: str) -> str | None:
+        """Сторис ведёт на пост в той же сети: если поста там нет, публиковать сторис незачем."""
+        after = (self.cfg.networks.get(net) or {}).get("after")
+        if not after:
+            return None
+        pub = self.db.publication(post_id, after)
+        if pub is None or pub["state"] != "published":
+            return f"пост в {NET_TITLES.get(after, after)} не опубликован — сторис не на что вести"
+        return None
+
+    async def _publish_story(self, net: str, rendered: dict, post_id: int) -> PublishResult:
+        from aiogram.types import FSInputFile
+        post = self.db.post(post_id)
+        rehearsal = not self.is_live(net)
+        try:
+            card = await self.story_card(post_id, net, rendered)
+        except StoryError as exc:
+            raise PublishError(f"карточка сторис: {exc}", retryable=False) from exc
+        if net == "story_tg":
+            if rehearsal:
+                await self.bot.send_photo(self.author_id, FSInputFile(card), caption=(
+                    f"Репетиция {NET_TITLES[net]}: так выйдет сторис, подпись — «{rendered['caption']}». "
+                    "Ничего не опубликовано.")[:1000])
+                return PublishResult("", None, {"rehearsal": True})
+            return await self.tg_story().publish(card, rendered["caption"], post["tg_msg_id"], CTA_BOX)
+        if net == "story_vk":
+            link = self.db.publication(post_id, "vk")["remote_url"]
+            spec = self.cfg.networks.get(net) or {}
+            text = spec.get("sticker") or "Ссылка на пост"
+            pub = VKStoryPublisher(os.environ.get("VK_USER_ID", "873291997"), shots_dir=self.cfg.data_dir / "shots")
+            res = await pub.publish_story(card, link, text, VK_STICKER_BOX, rehearsal=rehearsal)
+        elif net == "story_fb":
+            res = await FBStoryPublisher(self.fb().profile_url, shots_dir=self.cfg.data_dir / "shots").publish_story(
+                card, rehearsal=rehearsal)
+        else:
+            raise PublishError(f"публикация в {net} не реализована", retryable=False)
+        if res.extra.get("rehearsal"):
+            await self._send_shot(res.extra.get("shot"), f"Репетиция {NET_TITLES[net]}: так выглядит сторис перед "
+                                  "публикацией. Ничего не опубликовано.")
+        return res
+
     async def _send_shot(self, name: str | None, caption: str) -> None:
         from aiogram.types import FSInputFile
         path = self.cfg.data_dir / "shots" / (name or "")
@@ -517,18 +602,23 @@ class SMMDaemon:
             pub = self.db.publication(post_id, net)
             if pub and pub["state"] in ("published", "skipped"):
                 continue
-            rendered = gen["publishable"].get(net)
+            src = llm_network(net)
+            rendered = gen["publishable"].get(src)
             if rendered is None:
-                why = gen["errors"].get(net) or gen["skipped"].get(net) or [
-                    f"судья: {gen['verdicts'].get(net, {}).get('verdict', 'нет вердикта')}"]
+                why = gen["errors"].get(src) or gen["skipped"].get(src) or [
+                    f"судья: {gen['verdicts'].get(src, {}).get('verdict', 'нет вердикта')}"]
                 self.db.upsert_publication(post_id, net, state="skipped", error="; ".join(why)[:500])
+                continue
+            blocker = self.story_blocker(post_id, net) if net.startswith("story_") else None
+            if blocker:
+                self.db.upsert_publication(post_id, net, state="skipped", error=blocker)
                 continue
             done = json.loads(pub["extra_json"]) if pub and pub["extra_json"] else {}
             for attempt in range(self.d.get("max_attempts", 3)):
                 self.db.upsert_publication(post_id, net, state="publishing", attempts=attempt + 1,
                                            attempt_started_at=now_iso())
                 try:
-                    res = await self._publish_one(net, rendered, media, done)
+                    res = await self._publish_one(net, rendered, media, done, post_id=post_id)
                     if res.extra.get("rehearsal"):
                         self.db.upsert_publication(post_id, net, state="skipped", error="репетиция — снимок отправлен, "
                                                    "публикация не выполнялась", extra_json=dumps(res.extra))
@@ -673,10 +763,12 @@ class SMMDaemon:
     async def cmd_retry(self, msg: Message, command: CommandObject) -> None:
         post = self._find(command.args)
         if not post:
-            await msg.answer("Укажите номер поста: /retry 1234 [threads|max]")
+            await msg.answer("Укажите номер поста: /retry 1234 [threads|max|story|story_tg|story_vk|story_fb]")
             return
         parts = command.args.split()
         nets = parts[1:] or [p["network"] for p in self.db.publications(post["id"]) if p["state"] != "published"]
+        if "story" in nets:
+            nets = [n for n in nets if n != "story"] + self.story_nets()
         for net in nets:
             self.db.upsert_publication(post["id"], net, state="pending", error=None)
         self.db.update_post(post["id"], gen_hash=None)  # явный повтор — адаптируем заново
@@ -730,6 +822,9 @@ class SMMDaemon:
                     + (f"💡 {thoughts[i - 1]}\n\n" if i - 1 < len(thoughts) and thoughts[i - 1] else "")
                     + p + (f"\n#{tags[i - 1]}" if i - 1 < len(tags) else "")
                     for i, p in enumerate(rendered["parts"], 1))
+            elif net == "story":
+                await self.show_story(post_id, rendered)
+                return
             else:
                 body = rendered.get("text", "")
             if net == "max" and rendered.get("buttons"):
@@ -749,6 +844,24 @@ class SMMDaemon:
                                         inline_keyboard=[[InlineKeyboardButton(text="✏️ Доработать",
                                                                                callback_data=f"fix:{post_id}:{net}")]]))
 
+    async def show_story(self, post_id: int, rendered: dict) -> None:
+        """Предпросмотр сторис — сама карточка (вариант для Telegram); фон потом идёт в публикацию."""
+        from aiogram.types import FSInputFile
+        nets = ", ".join(NET_TITLES[n] for n in self.story_nets()) or "ни одна площадка не включена"
+        done = [NET_TITLES[n] for n in self.story_nets()
+                if (p := self.db.publication(post_id, n)) and p["state"] == "published"]
+        text = (f"— Сторис ({nets})\n\nТекст на карточке и подпись: «{rendered['card_title']}»"
+                + (f"\nУже опубликована: {', '.join(done)}" if done else ""))
+        kb = self._net_buttons(post_id, "story")
+        try:
+            card = await self.story_card(post_id, "story_tg", rendered)
+        except Exception as exc:  # noqa: BLE001 — без картинки покажем хотя бы текст
+            log.warning("карточка сторис для предпросмотра: %s", exc)
+            await self.bot.send_message(self.author_id, f"{text}\n\n⚠ Картинку сделать не получилось: {exc}"[:4000],
+                                        reply_markup=kb)
+            return
+        await self.bot.send_photo(self.author_id, FSInputFile(card), caption=text[:1000], reply_markup=kb)
+
     async def preview_post(self, post_id: int) -> None:
         """Версии по сетям без публикации, у каждой свои кнопки. Результат сохраняется и переиспользуется."""
         post = self.db.post(post_id)
@@ -763,7 +876,7 @@ class SMMDaemon:
         if gen.get("status") != "ready":
             await self.notify(f"Не получилось подготовить версии: {gen.get('reason')}")
             return
-        for net in self.networks():
+        for net in self.llm_networks():
             await self.show_version(post_id, net, gen)
 
     async def revise(self, post_id: int, net: str, notes: str) -> None:
@@ -848,7 +961,7 @@ class SMMDaemon:
             return
         await msg.answer("Готовлю пробные версии, это 1–3 минуты…")
         inp = await asyncio.to_thread(self.post_input, data["text"], data["entities"], data["media"])
-        result = await asyncio.to_thread(safe_adapt, self.adapter(), inp, self.networks())
+        result = await asyncio.to_thread(safe_adapt, self.adapter(), inp, self.llm_networks())
         for run in result.llm_runs:
             self.db.log_llm(None, run)
         if result.status != "ready":
@@ -858,7 +971,8 @@ class SMMDaemon:
             verdict = result.verdicts.get(net, {}).get("verdict", "—")
             head = f"— {NET_TITLES.get(net, net)} · проверка: {'ok' if v.ok else 'ошибки'} · судья: {verdict}"
             if v.ok and v.rendered:
-                body = "\n\n".join(v.rendered["parts"]) if net == "threads" else v.rendered.get("text", "")
+                body = ("\n\n".join(v.rendered["parts"]) if net == "threads" else
+                        f"Карточка: «{v.rendered['card_title']}»" if net == "story" else v.rendered.get("text", ""))
                 if net == "max" and v.rendered.get("buttons"):
                     body += "\n\n[кнопки: " + ", ".join(b["label"] for b in v.rendered["buttons"]) + "]"
             else:

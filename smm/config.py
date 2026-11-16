@@ -71,6 +71,19 @@ class Config:
     def enabled_networks(self) -> list[str]:
         return [n for n, spec in self.networks.items() if isinstance(spec, dict) and spec.get("enabled")]
 
+    def llm_networks(self, networks: list[str] | None = None) -> list[str]:
+        """Для каких «сетей» писать текст: все сторис (story_tg, story_vk, …) делят один текст `story`."""
+        out: list[str] = []
+        for n in networks if networks is not None else self.enabled_networks():
+            n = llm_network(n)
+            if n not in out:
+                out.append(n)
+        return out
+
+
+def llm_network(net: str) -> str:
+    return "story" if net.startswith("story_") else net
+
 
 def load_config(root: Path = ROOT) -> Config:
     load_dotenv(root / ".env")

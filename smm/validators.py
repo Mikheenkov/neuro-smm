@@ -158,16 +158,14 @@ def validate(
             "key_thoughts": [t.get("thought") for t in out.get("key_thoughts") or []],
         }
     elif network == "story":
-        title, caption = out.get("card_title") or "", out.get("caption") or ""
+        # Текст карточки — он же подпись к сторис (решение автора): отдельного caption нет.
+        title = (out.get("card_title") or "").strip()
         if not title:
             res.err("story: пустой card_title")
         if len(title) > spec.get("card_title_max", 90):
             res.err(f"story: card_title {len(title)} символов, лимит {spec.get('card_title_max', 90)}")
-        if len(caption) > spec.get("caption_max", 200):
-            res.err(f"story: caption {len(caption)} символов, лимит {spec.get('caption_max', 200)}")
-        full_plain = f"{title}\n{out.get('card_subtitle') or ''}\n{caption}"
-        _check_text_rules(res, full_plain, allow_tg=True)
-        res.rendered = {"card_title": title, "card_subtitle": out.get("card_subtitle"), "caption": caption}
+        _check_text_rules(res, title, allow_tg=False)  # карточка уходит и в VK, и в Facebook
+        res.rendered = {"card_title": title, "caption": title}
         return res  # инварианты для Stories не проверяем: это тизер, не пересказ
     else:
         ir = out.get("text_ir") or ""

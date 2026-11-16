@@ -45,13 +45,16 @@ class BrowserPublisher:
         self.cdp_host = cdp_host
 
     async def publish(self, rendered: dict, *, images: list[Path] | None = None, rehearsal: bool = False) -> PublishResult:
+        return await self._run(lambda page: self._publish(page, rendered["text"], images or [], rehearsal))
+
+    async def _run(self, scenario) -> PublishResult:
         async with _LOCK:
             async with async_playwright() as p:
                 browser = await p.chromium.connect_over_cdp(_cdp_url(self.cdp_host), timeout=30000)
                 page = await browser.contexts[0].new_page()
                 try:
                     await page.set_viewport_size({"width": 1400, "height": 1000})
-                    return await self._publish(page, rendered["text"], images or [], rehearsal)
+                    return await scenario(page)
                 except PublishError:
                     await self._shot(page, "error")
                     raise
@@ -244,3 +247,107 @@ class FBPublisher(BrowserPublisher):
                     return href.split("?")[0]
             return None
         return None
+
+
+async def run_in_browser(fn, cdp_host: str = "browser"):
+    """Любая работа в серверном Chromium (например, отрисовка карточки сторис) — под тем же замком."""
+    async with _LOCK:
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(_cdp_url(cdp_host), timeout=30000)
+            page = await browser.contexts[0].new_page()
+            try:
+                return await fn(page)
+            finally:
+                await page.close()
+
+
+class VKStoryPublisher(VKPublisher):
+    """Сторис на личной странице VK: картинка + стикер «ссылка» на пост в VK, перетащенный на место кнопки."""
+    network = "story_vk"
+    _EDITOR = "https://vk.ru/feed?w=story_publisher%3Fentrypoint%3Dstories_feed"
+
+    async def publish_story(self, card: Path, link_url: str, link_text: str, cta_box: dict, *,
+                            rehearsal: bool = False) -> PublishResult:
+        return await self._run(lambda page: self._story(page, card, link_url, link_text, cta_box, rehearsal))
+
+    async def _story(self, page: Page, card: Path, link_url: str, link_text: str, cta_box: dict,
+                     rehearsal: bool) -> PublishResult:
+        await page.goto(self._EDITOR, wait_until="domcontentloaded")
+        await self._check_login(page)
+        modal = page.locator("[data-testid=modalbox]")
+        file_input = modal.locator("input[type=file]")
+        try:
+            await file_input.wait_for(state="attached", timeout=40000)
+        except Exception:
+            raise PublishError("VK: редактор историй не открылся", retryable=True)
+        await file_input.set_input_files(str(card))
+        viewport = page.locator("[data-testid=photo-editor-viewport]")
+        await viewport.wait_for(timeout=40000)
+        await page.wait_for_timeout(4000)
+        await _pause()
+        await page.locator("[data-testid=sidebar-stickers-button]").click()
+        await page.get_by_text(re.compile(r"^(add link|добавить ссылку)$", re.I)).click(timeout=20000)
+        await page.locator("[data-testid=modal-sticker-native-link-url]").fill(link_url)
+        await page.locator("[data-testid=modal-sticker-native-link-text]").fill(link_text[:30])
+        await _pause()
+        await page.get_by_role("button", name=re.compile(r"^(add|добавить)$", re.I)).click()
+        await page.wait_for_timeout(2500)
+        # Стикер появляется в центре холста — переносим его туда, где на карточке оставлено место под кнопку.
+        box = await viewport.bounding_box()
+        cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        tx, ty = box["x"] + box["width"] * cta_box["x"], box["y"] + box["height"] * cta_box["y"]
+        await page.mouse.move(cx, cy)
+        await page.mouse.down()
+        for i in range(1, 16):
+            await page.mouse.move(cx + (tx - cx) * i / 15, cy + (ty - cy) * i / 15)
+            await page.wait_for_timeout(40)
+        await page.mouse.up()
+        await page.wait_for_timeout(1500)
+        publish = page.locator("[data-testid=publish-button]")
+        if rehearsal:
+            shot = await self._shot(page, "rehearsal")
+            return PublishResult("", None, {"rehearsal": True, "shot": shot}, ["репетиция: дошёл до кнопки «Publish», не нажимал"])
+        await _pause(1.5, 3)
+        await publish.click()
+        try:
+            await modal.wait_for(state="detached", timeout=90000)
+        except Exception:
+            raise PublishError("VK: история не опубликовалась за 90 секунд", retryable=False)
+        url = f"https://vk.ru/id{self.user_id}"
+        return PublishResult("", url, {}, [])
+
+
+class FBStoryPublisher(FBPublisher):
+    """Сторис в личном профиле Facebook. Стикера-ссылки в веб-версии нет — только картинка."""
+    network = "story_fb"
+    _SHARE = re.compile(r"^(share to story|поделиться в истории|опубликовать в истории)$", re.I)
+
+    async def publish_story(self, card: Path, *, rehearsal: bool = False) -> PublishResult:
+        return await self._run(lambda page: self._story(page, card, rehearsal))
+
+    async def _story(self, page: Page, card: Path, rehearsal: bool) -> PublishResult:
+        await page.goto("https://www.facebook.com/stories/create", wait_until="domcontentloaded")
+        await self._check_login(page)
+        file_input = page.locator("input[type=file]").first
+        try:
+            await file_input.wait_for(state="attached", timeout=40000)
+        except Exception:
+            raise PublishError("Facebook: страница создания истории не открылась", retryable=True)
+        await _pause()
+        await file_input.set_input_files(str(card))
+        share = page.get_by_role("button", name=self._SHARE).or_(page.get_by_text(self._SHARE)).first
+        try:
+            await share.wait_for(timeout=60000)
+        except Exception:
+            raise PublishError("Facebook: картинка истории не загрузилась", retryable=True)
+        await page.wait_for_timeout(3000)
+        if rehearsal:
+            shot = await self._shot(page, "rehearsal")
+            return PublishResult("", None, {"rehearsal": True, "shot": shot}, ["репетиция: дошёл до «Share to story», не нажимал"])
+        await _pause(1.5, 3)
+        await share.click()
+        try:
+            await page.wait_for_url(lambda u: "stories/create" not in u, timeout=90000)
+        except Exception:
+            raise PublishError("Facebook: история не опубликовалась за 90 секунд", retryable=False)
+        return PublishResult("", self.profile_url, {}, [])

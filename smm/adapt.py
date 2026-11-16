@@ -67,7 +67,7 @@ class Adapter:
 
     def adapt(self, post: PostInput, networks: list[str] | None = None, *, feedback: dict | None = None) -> AdaptResult:
         """feedback = {"network": ..., "previous": прошлая версия, "notes": что сказал автор} — доработка одной сети."""
-        networks = [feedback["network"]] if feedback else (networks or [n for n in self.cfg.enabled_networks()])
+        networks = [feedback["network"]] if feedback else self.cfg.llm_networks(networks or None)
         ir: IRResult = entities_to_ir(post.text, post.entities)
         result = AdaptResult(status="ready")
 

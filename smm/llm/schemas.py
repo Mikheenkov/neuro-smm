@@ -44,7 +44,7 @@ NETWORK_SCHEMAS = {
         "link_attachment_ref": _NS, "dropped_facts": DROPPED,
     }),
     "story": _obj({
-        "skip": {"type": "boolean"}, "skip_reason": _NS, "card_title": _S, "card_subtitle": _NS, "caption": _S,
+        "skip": {"type": "boolean"}, "skip_reason": _NS, "card_title": _S,
     }),
 }
 
