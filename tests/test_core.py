@@ -217,3 +217,11 @@ def test_story_card_text_is_also_caption_and_has_no_telegram():
     assert ok.ok and ok.rendered["caption"] == "Как я перестал нанимать звёзд"
     bad = validate("story", {"card_title": "Новый пост в моём телеграм-канале " + "x" * 120}, [], None, cfg)
     assert not bad.ok and len(bad.errors) == 2
+
+
+def test_story_post_image_fit():
+    from smm.stories import fit_for
+    assert fit_for(1080, 1920) == "cover"      # вертикальная — на весь кадр
+    assert fit_for(1280, 720) == "contain"     # горизонтальная — целиком, на размытой подложке
+    assert fit_for(1000, 1000) == "contain"
+    assert fit_for(None, None) == "cover"

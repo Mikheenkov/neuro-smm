@@ -1,6 +1,8 @@
 """Карточка сторис 1080×1920 (Telegram и Instagram) по образцу автора storystyle.png.
 
-- Фон — случайное фото из фотобанка (photobank/), масштабируется под размер (cover).
+- Фон — картинка поста, если она есть (первая фотография). Нет картинки — случайное фото автора из
+  фотобанка (photobank/). Вертикальная картинка заполняет кадр (cover); горизонтальная или квадратная
+  (скриншот, инфографика) показывается целиком в верхней части на размытой подложке из неё же.
 - Тонировка #936A58: от левого нижнего угла вправо и вверх. Внизу, под текстом, почти сплошной цвет,
   вверху фото естественное.
 - Внизу — текст (заголовок поста или ключевая мысль), под ним в самом низу — стикер «Ссылка на пост».
@@ -56,9 +58,21 @@ def pick_photo(library: Path, used: list[str]) -> Path:
     return min(photos, key=lambda p: order[p.name])
 
 
-def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = True) -> str:
+def fit_for(width: int | None, height: int | None) -> str:
+    """cover — заполнить кадр с обрезкой; contain — показать картинку целиком (сильно обрезалась бы)."""
+    if not width or not height:
+        return "cover"
+    return "cover" if height / width >= 1.25 else "contain"
+
+
+def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = True, fit: str = "cover") -> str:
     mime = {".png": "image/png", ".webp": "image/webp"}.get(photo.suffix.lower(), "image/jpeg")
     img = base64.b64encode(photo.read_bytes()).decode()
+    src = f"data:{mime};base64,{img}"
+    if fit == "contain":
+        photo_html = (f'<img class="photo blur" src="{src}"><img class="photo whole" src="{src}">')
+    else:
+        photo_html = f'<img class="photo" src="{src}">'
     s = STICKER
     sticker_html = (f'<div class="sticker">{_LINK_ICON if link_icon else ""}<span>{escape(sticker)}</span></div>'
                     if sticker else "")
@@ -68,6 +82,8 @@ def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = 
 <style>
   html, body {{ margin: 0; width: {W}px; height: {H}px; overflow: hidden; background: rgb({TINT}); }}
   .photo {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 30%; }}
+  .blur {{ inset: -60px; width: calc(100% + 120px); height: calc(100% + 120px); filter: blur(46px) brightness(.85); }}
+  .whole {{ top: 170px; height: 1180px; object-fit: contain; object-position: center center; }}
   /* Тон: диагональ из левого нижнего угла вправо-вверх + основание внизу под текст. */
   .tint {{ position: absolute; inset: 0; background:
       linear-gradient(32deg, rgba({TINT},1) 0%, rgba({TINT},1) 24%, rgba({TINT},.8) 33%, rgba({TINT},.35) 44%, rgba({TINT},0) 56%),
@@ -79,7 +95,7 @@ def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = 
     box-sizing: border-box; padding: 0 34px 0 26px; display: flex; align-items: center; gap: 14px; border-radius: 22px;
     background: #fff; color: #2F72EA; font: 400 46px 'Golos Text', sans-serif; white-space: nowrap; }}
 </style></head><body>
-<img class="photo" src="data:{mime};base64,{img}"><div class="tint"></div>
+{photo_html}<div class="tint"></div>
 {_LOGO}
 <div class="text" id="t">{escape(text)}</div>
 {sticker_html}
@@ -92,10 +108,12 @@ def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = 
 </script></body></html>"""
 
 
-async def render_card(page, photo: Path, text: str, sticker: str | None, out: Path, *, link_icon: bool = True) -> Path:
+async def render_card(page, photo: Path, text: str, sticker: str | None, out: Path, *, link_icon: bool = True,
+                      fit: str = "cover") -> Path:
     """page — страница Playwright (локальный Chromium или серверный через CDP)."""
     await page.set_viewport_size({"width": W, "height": H})
-    await page.set_content(card_html(photo, text, sticker, link_icon=link_icon), wait_until="networkidle", timeout=60000)
+    await page.set_content(card_html(photo, text, sticker, link_icon=link_icon, fit=fit), wait_until="networkidle",
+                           timeout=60000)
     await page.wait_for_function("document.body.dataset.ready === '1'", timeout=30000)
     out.parent.mkdir(parents=True, exist_ok=True)
     await page.screenshot(path=str(out), type="jpeg", quality=92)
@@ -130,6 +148,8 @@ class StoryCards:
         return chosen
 
     async def card(self, page, post_id: int, text: str, sticker: str | None, variant: str, *,
-                   link_icon: bool = True) -> Path:
-        return await render_card(page, self.photo(post_id), text, sticker,
-                                 self.folder(post_id) / f"card-{variant}.jpg", link_icon=link_icon)
+                   link_icon: bool = True, post_image: Path | None = None, fit: str = "cover") -> Path:
+        """post_image — картинка самого поста: она важнее фото из фотобанка."""
+        photo = post_image if post_image else self.photo(post_id)
+        return await render_card(page, photo, text, sticker, self.folder(post_id) / f"card-{variant}.jpg",
+                                 link_icon=link_icon, fit=fit if post_image else "cover")

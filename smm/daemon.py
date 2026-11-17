@@ -39,7 +39,7 @@ from smm.publishers.max_api import MaxPublisher, find_post_url
 from smm.publishers.browser import FBPublisher, FBStoryPublisher, VKPublisher, VKStoryPublisher, run_in_browser
 from smm.publishers.tg_story import TGStoryPublisher
 from smm.publishers.threads import ThreadsPublisher
-from smm.stories import CTA_BOX, VK_STICKER_BOX, StoryCards, StoryError
+from smm.stories import CTA_BOX, VK_STICKER_BOX, StoryCards, StoryError, fit_for
 
 log = logging.getLogger("smm")
 
@@ -222,9 +222,18 @@ class SMMDaemon:
             sticker, icon = spec.get("sticker") or "Новый пост в профиле", False  # ссылки в Facebook нет
         else:
             sticker = spec.get("sticker") or "Ссылка на пост"
+        # Картинка поста (первое фото) важнее фото из фотобанка; нет фото в посте — берём фотобанк.
+        photos = [m for m in json.loads(self.db.post(post_id)["media_json"] or "[]") if m["type"] == "photo"]
+        post_image, fit = None, "cover"
+        if photos:
+            try:
+                post_image = (await self._download(photos[:1], "photo"))[0]
+                fit = fit_for(photos[0].get("width"), photos[0].get("height"))
+            except Exception as exc:  # noqa: BLE001 — не скачалась картинка поста: сторис всё равно выйдет на фото автора
+                log.warning("сторис поста %s: картинку поста скачать не удалось (%s), беру фотобанк", post_id, exc)
         variant = net.removeprefix("story_")
         return await run_in_browser(lambda page: cards.card(page, post_id, rendered["card_title"], sticker, variant,
-                                                            link_icon=icon))
+                                                            link_icon=icon, post_image=post_image, fit=fit))
 
     def max(self) -> MaxPublisher:
         import os
