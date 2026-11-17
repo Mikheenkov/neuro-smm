@@ -225,3 +225,19 @@ def test_story_post_image_fit():
     assert fit_for(1280, 720) == "contain"     # горизонтальная — целиком, на размытой подложке
     assert fit_for(1000, 1000) == "contain"
     assert fit_for(None, None) == "cover"
+
+
+def test_story_background_prefers_post_image_and_falls_back_to_crop(tmp_path):
+    from smm.stories import StoryCards
+    lib = tmp_path / "bank"
+    lib.mkdir()
+    (lib / "me.jpg").write_bytes(b"x")
+    post = tmp_path / "post.jpg"
+    post.write_bytes(b"y")
+    cards = StoryCards(lib, tmp_path / "stories")  # без ключа OpenAI
+    assert cards.background(1) == lib / "me.jpg"                       # картинки нет — фотобанк
+    assert cards.background(2, post, "cover") == post                  # вертикальная — как есть
+    assert cards.background(3, post, "contain") == post                # пересобрать нечем — обрезка на весь кадр
+    (tmp_path / "stories" / "4").mkdir(parents=True)
+    (tmp_path / "stories" / "4" / "post-vertical.png").write_bytes(b"z")
+    assert cards.background(4, post, "contain").name == "post-vertical.png"  # уже пересобрана — из кэша

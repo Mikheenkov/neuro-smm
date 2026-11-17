@@ -1,8 +1,9 @@
 """Карточка сторис 1080×1920 (Telegram и Instagram) по образцу автора storystyle.png.
 
 - Фон — картинка поста, если она есть (первая фотография). Нет картинки — случайное фото автора из
-  фотобанка (photobank/). Вертикальная картинка заполняет кадр (cover); горизонтальная или квадратная
-  (скриншот, инфографика) показывается целиком в верхней части на размытой подложке из неё же.
+  фотобанка (photobank/). Фон всегда занимает весь кадр. Вертикальная картинка просто масштабируется;
+  горизонтальную или квадратную OpenAI Images пересобирает в вертикальную (фото — перекадрирует,
+  заголовки, даты, списки — перекомпонует). Не получилось — картинка обрезается на весь кадр.
 - Тонировка #936A58: от левого нижнего угла вправо и вверх. Внизу, под текстом, почти сплошной цвет,
   вверху фото естественное.
 - Внизу — текст (заголовок поста или ключевая мысль), под ним в самом низу — стикер «Ссылка на пост».
@@ -46,6 +47,43 @@ class StoryError(Exception):
     pass
 
 
+RECOMPOSE_PROMPT = (
+    "Recompose this image into a vertical 2:3 portrait image that fills the whole frame, for a phone story. "
+    "If it is a photograph: reframe it vertically around the main subject, extending the surroundings naturally "
+    "where needed; keep every person exactly as in the original — same face, features, glasses, hair, expression, "
+    "pose and clothes; do not beautify, restyle or change identity. "
+    "If it contains graphic or text elements (headlines, dates, numbers, lists, labels, logos, screenshots of pages): "
+    "rearrange them to fit the vertical layout, keeping every word, number and date exactly as written, in the same "
+    "language and visual style; do not invent new text. "
+    "Keep the lower 35% of the frame calm background without any text or important details: a caption will be "
+    "placed there. Keep the top-left corner (top 10% of the height, left 30% of the width) empty: a logo goes there. "
+    "No borders, no letterboxing, no blurred padding, no added watermarks."
+)
+
+
+def recompose(image: Path, out: Path, api_key: str, *, model: str = "gpt-image-2", timeout: float = 240) -> Path:
+    """Горизонтальную или квадратную картинку поста пересобирает в вертикальную на весь кадр (OpenAI Images edits):
+    фото — перекадрирует, заголовки, даты и списки — перекомпонует. Результат PNG 1024×1536."""
+    import httpx
+    mime = {".png": "image/png", ".webp": "image/webp"}.get(image.suffix.lower(), "image/jpeg")
+    try:
+        r = httpx.post("https://api.openai.com/v1/images/edits", timeout=timeout,
+                       headers={"Authorization": f"Bearer {api_key}"},
+                       data={"model": model, "prompt": RECOMPOSE_PROMPT, "size": "1024x1536", "quality": "high",
+                             "n": "1"},
+                       files={"image[]": (image.name, image.read_bytes(), mime)})
+    except httpx.HTTPError as exc:
+        raise StoryError(f"OpenAI Images недоступен: {type(exc).__name__}") from exc
+    if r.status_code != 200:
+        raise StoryError(f"OpenAI Images вернул {r.status_code}: {r.text[:200]}")
+    b64 = (r.json().get("data") or [{}])[0].get("b64_json")
+    if not b64:
+        raise StoryError("OpenAI Images не вернул картинку")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(base64.b64decode(b64))
+    return out
+
+
 def pick_photo(library: Path, used: list[str]) -> Path:
     """Случайное фото, по возможности из тех, что ещё не использовались; иначе — то, что было давнее всех."""
     photos = [p for p in sorted(library.glob("*")) if p.suffix.lower() in PHOTO_EXT]
@@ -59,20 +97,16 @@ def pick_photo(library: Path, used: list[str]) -> Path:
 
 
 def fit_for(width: int | None, height: int | None) -> str:
-    """cover — заполнить кадр с обрезкой; contain — показать картинку целиком (сильно обрезалась бы)."""
+    """cover — достаточно масштабировать; contain — при обрезке потерялось бы много, картинку надо пересобрать."""
     if not width or not height:
         return "cover"
     return "cover" if height / width >= 1.25 else "contain"
 
 
-def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = True, fit: str = "cover") -> str:
+def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = True) -> str:
     mime = {".png": "image/png", ".webp": "image/webp"}.get(photo.suffix.lower(), "image/jpeg")
     img = base64.b64encode(photo.read_bytes()).decode()
-    src = f"data:{mime};base64,{img}"
-    if fit == "contain":
-        photo_html = (f'<img class="photo blur" src="{src}"><img class="photo whole" src="{src}">')
-    else:
-        photo_html = f'<img class="photo" src="{src}">'
+    photo_html = f'<img class="photo" src="data:{mime};base64,{img}">'
     s = STICKER
     sticker_html = (f'<div class="sticker">{_LINK_ICON if link_icon else ""}<span>{escape(sticker)}</span></div>'
                     if sticker else "")
@@ -82,8 +116,6 @@ def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = 
 <style>
   html, body {{ margin: 0; width: {W}px; height: {H}px; overflow: hidden; background: rgb({TINT}); }}
   .photo {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 30%; }}
-  .blur {{ inset: -60px; width: calc(100% + 120px); height: calc(100% + 120px); filter: blur(46px) brightness(.85); }}
-  .whole {{ top: 170px; height: 1180px; object-fit: contain; object-position: center center; }}
   /* Тон: диагональ из левого нижнего угла вправо-вверх + основание внизу под текст. */
   .tint {{ position: absolute; inset: 0; background:
       linear-gradient(32deg, rgba({TINT},1) 0%, rgba({TINT},1) 24%, rgba({TINT},.8) 33%, rgba({TINT},.35) 44%, rgba({TINT},0) 56%),
@@ -108,12 +140,10 @@ def card_html(photo: Path, text: str, sticker: str | None, *, link_icon: bool = 
 </script></body></html>"""
 
 
-async def render_card(page, photo: Path, text: str, sticker: str | None, out: Path, *, link_icon: bool = True,
-                      fit: str = "cover") -> Path:
+async def render_card(page, photo: Path, text: str, sticker: str | None, out: Path, *, link_icon: bool = True) -> Path:
     """page — страница Playwright (локальный Chromium или серверный через CDP)."""
     await page.set_viewport_size({"width": W, "height": H})
-    await page.set_content(card_html(photo, text, sticker, link_icon=link_icon, fit=fit), wait_until="networkidle",
-                           timeout=60000)
+    await page.set_content(card_html(photo, text, sticker, link_icon=link_icon), wait_until="networkidle", timeout=60000)
     await page.wait_for_function("document.body.dataset.ready === '1'", timeout=30000)
     out.parent.mkdir(parents=True, exist_ok=True)
     await page.screenshot(path=str(out), type="jpeg", quality=92)
@@ -123,10 +153,13 @@ async def render_card(page, photo: Path, text: str, sticker: str | None, out: Pa
 class StoryCards:
     """Фото на пост + карточки по площадкам. Какие фото уже были — в базе демона (чтобы не повторяться подряд)."""
 
-    def __init__(self, library: Path, root: Path, db=None):
+    def __init__(self, library: Path, root: Path, db=None, *, openai_key: str | None = None,
+                 model: str = "gpt-image-2"):
         self.library = library
         self.root = root
         self.db = db
+        self.openai_key = openai_key
+        self.model = model
 
     def folder(self, post_id: int) -> Path:
         return self.root / str(post_id)
@@ -147,9 +180,26 @@ class StoryCards:
             self.db.set("story_photos_used", json.dumps(used[-200:], ensure_ascii=False))
         return chosen
 
+    def background(self, post_id: int, post_image: Path | None = None, fit: str = "cover") -> Path:
+        """Фон на весь кадр. Картинка поста важнее фотобанка; горизонтальную пересобираем один раз на пост
+        (кэш — предпросмотр и публикация показывают одно и то же и платим за пересборку один раз)."""
+        if post_image is None:
+            return self.photo(post_id)
+        if fit == "cover":
+            return post_image
+        out = self.folder(post_id) / "post-vertical.png"
+        if out.exists():
+            return out
+        if not self.openai_key:
+            log.warning("сторис поста %s: OPENAI_API_KEY не задан — картинка поста будет обрезана", post_id)
+            return post_image
+        try:
+            return recompose(post_image, out, self.openai_key, model=self.model)
+        except StoryError as exc:
+            log.warning("сторис поста %s: пересобрать картинку не удалось (%s) — обрезаю", post_id, exc)
+            return post_image
+
     async def card(self, page, post_id: int, text: str, sticker: str | None, variant: str, *,
-                   link_icon: bool = True, post_image: Path | None = None, fit: str = "cover") -> Path:
-        """post_image — картинка самого поста: она важнее фото из фотобанка."""
-        photo = post_image if post_image else self.photo(post_id)
-        return await render_card(page, photo, text, sticker, self.folder(post_id) / f"card-{variant}.jpg",
-                                 link_icon=link_icon, fit=fit if post_image else "cover")
+                   link_icon: bool = True, background: Path | None = None) -> Path:
+        return await render_card(page, background or self.photo(post_id), text, sticker,
+                                 self.folder(post_id) / f"card-{variant}.jpg", link_icon=link_icon)

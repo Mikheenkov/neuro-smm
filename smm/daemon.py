@@ -200,13 +200,20 @@ class SMMDaemon:
         library = self.cfg.data_dir / "photobank"
         if not library.exists():
             library = self.cfg.root / "photobank"
-        return StoryCards(library, self.cfg.data_dir / "stories", self.db)
+        return StoryCards(library, self.cfg.data_dir / "stories", self.db, openai_key=os.environ.get("OPENAI_API_KEY"),
+                          model=os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2"))
 
     def tg_story(self) -> TGStoryPublisher:
         own = (self.cfg.equivalents.get("own_tg_channel") or {}).get("username")
         spec = self.cfg.networks.get("story_tg") or {}
         return TGStoryPublisher(int(self.cfg.secret("TG_API_ID")), self.cfg.secret("TG_API_HASH"),
                                 self.cfg.data_dir / "tg_story.session", own, pinned=bool(spec.get("pinned", False)))
+
+    def story_tg_manual(self) -> bool:
+        """Решение автора (17.11.2026): сторис в Telegram выкладывает он сам — бот присылает готовую карточку.
+        Автоматически через Telethon можно только с Premium-аккаунта, а держать на сервере ключ от основного
+        аккаунта автор не хочет."""
+        return (self.cfg.networks.get("story_tg") or {}).get("mode", "manual") == "manual"
 
     def story_nets(self) -> list[str]:
         return [n for n in self.networks() if n.startswith("story_")]
@@ -216,8 +223,8 @@ class SMMDaemon:
         spec = self.cfg.networks.get(net) or {}
         cards = self.story_cards()
         icon = True
-        if net == "story_vk":
-            sticker = None  # настоящий стикер-ссылку VK ставим на это место в редакторе VK
+        if net == "story_vk" or self.story_tg_manual() and net == "story_tg":
+            sticker = None  # место под настоящий стикер-ссылку: в VK ставит сценарий браузера, в Telegram — автор
         elif net == "story_fb":
             sticker, icon = spec.get("sticker") or "Новый пост в профиле", False  # ссылки в Facebook нет
         else:
@@ -231,9 +238,11 @@ class SMMDaemon:
                 fit = fit_for(photos[0].get("width"), photos[0].get("height"))
             except Exception as exc:  # noqa: BLE001 — не скачалась картинка поста: сторис всё равно выйдет на фото автора
                 log.warning("сторис поста %s: картинку поста скачать не удалось (%s), беру фотобанк", post_id, exc)
+        # Пересборка в OpenAI — до того, как занять браузер (около минуты, один раз на пост).
+        bg = await asyncio.to_thread(cards.background, post_id, post_image, fit)
         variant = net.removeprefix("story_")
         return await run_in_browser(lambda page: cards.card(page, post_id, rendered["card_title"], sticker, variant,
-                                                            link_icon=icon, post_image=post_image, fit=fit))
+                                                            link_icon=icon, background=bg))
 
     def max(self) -> MaxPublisher:
         import os
@@ -565,6 +574,8 @@ class SMMDaemon:
             card = await self.story_card(post_id, net, rendered)
         except StoryError as exc:
             raise PublishError(f"карточка сторис: {exc}", retryable=False) from exc
+        if net == "story_tg" and self.story_tg_manual():
+            return await self._send_tg_story_kit(post, card, rendered)
         if net == "story_tg":
             if rehearsal:
                 await self.bot.send_photo(self.author_id, FSInputFile(card), caption=(
@@ -587,6 +598,23 @@ class SMMDaemon:
             await self._send_shot(res.extra.get("shot"), f"Репетиция {NET_TITLES[net]}: так выглядит сторис перед "
                                   "публикацией. Ничего не опубликовано.")
         return res
+
+    async def _send_tg_story_kit(self, post, card: Path, rendered: dict) -> PublishResult:
+        """Полуавтомат: карточка файлом (без сжатия), подпись и ссылка на пост — в личку автору в этом боте."""
+        from html import escape
+        from aiogram.types import FSInputFile
+        own = (self.cfg.equivalents.get("own_tg_channel") or {}).get("username")
+        url = f"https://t.me/{own}/{post['tg_msg_id']}"
+        text = (f"📲 <b>Сторис для Telegram-канала</b> — пост {post['tg_msg_id']}\n\n"
+                "1. Канал → «Добавить историю» → эта картинка.\n"
+                f"2. Подпись (нажмите, чтобы скопировать):\n<code>{escape(rendered['caption'])}</code>\n\n"
+                f"3. Стикер «Ссылка» — на пустое место внизу:\n<code>{escape(url)}</code>")
+        try:
+            await self.bot.send_document(self.author_id, FSInputFile(card, filename=f"story-{post['tg_msg_id']}.jpg"),
+                                         caption=text[:1024], parse_mode="HTML")
+        except Exception as exc:  # noqa: BLE001
+            raise PublishError(f"сторис Telegram: не удалось прислать карточку ({type(exc).__name__})") from exc
+        return PublishResult("", None, {"manual": True})
 
     async def _send_shot(self, name: str | None, caption: str) -> None:
         from aiogram.types import FSInputFile
@@ -664,7 +692,9 @@ class SMMDaemon:
         for p in self.db.publications(post_id):
             name = NET_TITLES.get(p["network"], p["network"])
             extra = json.loads(p["extra_json"] or "{}")
-            if p["state"] == "published":
+            if p["state"] == "published" and extra.get("manual"):
+                lines.append(f"📲 {name}: карточка у вас в боте — выложите вручную")
+            elif p["state"] == "published":
                 urls = extra.get("urls") or []
                 if p["network"] == "threads" and len(urls) > 1 and extra.get("mode") != "chain":
                     lines.append(f"✓ {name}: {len(urls)} отдельных поста")
