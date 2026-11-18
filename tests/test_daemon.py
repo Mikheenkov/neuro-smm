@@ -53,6 +53,9 @@ def daemon(tmp_path, monkeypatch):
         d.published.append((net, rendered))
         if net == "max" and getattr(d, "max_fails", False):
             raise PublishError("MAX упал", retryable=False)
+        if net == "max" and getattr(d, "max_flaky", 0):
+            d.max_flaky -= 1
+            raise PublishError("MAX: таймаут", retryable=True)
         return PublishResult(f"{net}-1", f"https://example/{net}/1", {"part_ids": ["t1"]} if net == "threads" else {})
 
     d.notify = notify
@@ -114,6 +117,38 @@ async def test_partial_failure_reports_error(daemon):
     await daemon.run_post(post["id"])
     assert daemon.db.post(post["id"])["state"] == "partial"
     assert "✗ MAX: ошибка — MAX упал" in daemon.notes[-1]
+
+
+async def test_temporary_failure_is_retried_later_until_done(daemon):
+    daemon.d = {**daemon.d, "max_attempts": 1, "retry_later_minutes": [10, 30]}
+    daemon.max_flaky = 2  # две неудачи подряд, третья попытка проходит
+    await daemon.on_channel_post(channel_msg(45, TEXT, ENTITIES))
+    post = daemon.db.post_by_msg(CHANNEL, 45)
+    await daemon.queue(post["id"])
+    await daemon.run_post(post["id"])
+    assert daemon.db.post(post["id"])["state"] == "queued"  # сам поставил в очередь
+    assert daemon.db.get(f"next_try:{post['id']}") and "Повторю автоматически через 10 мин" in daemon.notes[-1]
+    assert json.loads(daemon.db.get(f"queue_nets:{post['id']}")) == ["max"]  # Threads уже вышел — не трогаем
+
+    notes = len(daemon.notes)
+    await daemon.run_post(post["id"])  # вторая неудача — молча ждём дальше
+    assert daemon.db.post(post["id"])["state"] == "queued" and len(daemon.notes) == notes
+    await daemon.run_post(post["id"])
+    assert daemon.db.post(post["id"])["state"] == "done"
+    assert [n for n, _ in daemon.published].count("threads") == 1
+    assert "Получилось после автоповтора (2)" in daemon.notes[-1]
+
+
+async def test_retries_stop_after_limit(daemon):
+    daemon.d = {**daemon.d, "max_attempts": 1, "retry_later_minutes": [10]}
+    daemon.max_flaky = 5
+    await daemon.on_channel_post(channel_msg(46, TEXT, ENTITIES))
+    post = daemon.db.post_by_msg(CHANNEL, 46)
+    await daemon.queue(post["id"])
+    await daemon.run_post(post["id"])
+    await daemon.run_post(post["id"])
+    assert daemon.db.post(post["id"])["state"] == "partial"
+    assert "Автоповторы закончились (1)" in daemon.notes[-1] and "/retry 46" in daemon.notes[-1]
 
 
 async def test_stop_blocks_publication(daemon):

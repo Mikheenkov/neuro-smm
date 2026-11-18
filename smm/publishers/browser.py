@@ -37,6 +37,13 @@ async def _pause(lo: float = 0.8, hi: float = 2.5) -> None:
     await asyncio.sleep(random.uniform(lo, hi))  # человеческий темп, без серий мгновенных действий
 
 
+def _btn(page: Page, *names: str):
+    """Кнопка по видимому названию (англ. или рус. интерфейс). VK в ноябре 2026 убрал data-testid —
+    опираемся на то, что видит человек."""
+    pattern = re.compile("^(" + "|".join(re.escape(n) for n in names) + ")$", re.I)
+    return page.get_by_role("button", name=pattern)
+
+
 class BrowserPublisher:
     network = ""
 
@@ -61,7 +68,8 @@ class BrowserPublisher:
                 except Exception as exc:
                     shot = await self._shot(page, "error")
                     raise PublishError(f"{self.network}: сбой сценария браузера ({type(exc).__name__}: {str(exc)[:150]}); "
-                                       f"снимок экрана: {shot}", retryable=False) from exc
+                                       f"снимок экрана: {shot}", retryable=True) from exc  # таймауты и сбои страницы чаще временные;
+                    # дубля не будет: перед публикацией VK и Facebook проверяют, нет ли поста уже на стене
                 finally:
                     await page.close()
 
@@ -93,11 +101,26 @@ class VKPublisher(BrowserPublisher):
         """(ссылка, текст) последних своих постов на стене."""
         await page.goto(f"https://vk.ru/wall{self.user_id}?owner=1", wait_until="domcontentloaded")
         await self._check_login(page)
-        await page.locator("[data-testid=post_date_block_preview]").first.wait_for(timeout=40000)
-        return await page.evaluate("""() => [...document.querySelectorAll('[data-testid=post_date_block_preview]')].slice(0, 5).map(a => {
-            const post = a.closest('[data-post-id], .post, article') || a.parentElement.parentElement.parentElement.parentElement;
-            return [a.href, (post && post.innerText) || ''];
-        })""")
+        # Ссылка-дата каждого поста ведёт на /wall<id>_<номер>; пост — ближайший [data-post-id].
+        date_link = f'a[href*="/wall{self.user_id}_"]'
+        try:
+            await page.locator(date_link).first.wait_for(timeout=40000)
+        except Exception:
+            if await page.get_by_text(re.compile(r"^(no posts yet|на стене пока нет записей)", re.I)).count():
+                return []
+            raise PublishError("VK: стена не загрузилась (не нашёл посты)", retryable=True)
+        return await page.evaluate("""(sel) => {
+            const seen = new Set(), out = [];
+            for (const a of document.querySelectorAll(sel)) {
+                const post = a.closest('[data-post-id]');
+                const id = post ? post.dataset.postId : a.getAttribute('href');
+                if (seen.has(id) || !/wall-?\\d+_\\d+$/.test(a.getAttribute('href') || '')) continue;
+                seen.add(id);
+                out.push([a.href, (post && post.innerText) || '']);
+                if (out.length >= 5) break;
+            }
+            return out;
+        }""", date_link)
 
     def _match(self, posts: list[tuple[str, str]], text: str) -> str | None:
         head = _norm(text)[:60]
@@ -110,8 +133,9 @@ class VKPublisher(BrowserPublisher):
                                  {"dedup": True}, ["пост уже был на стене — повторно не публиковал"])
         await page.goto(f"https://vk.ru/id{self.user_id}", wait_until="domcontentloaded")
         await self._check_login(page)
-        await page.locator("[data-testid=posting_create_post_button]").click(timeout=40000)
-        box = page.locator("[data-testid=posting_base_screen_input_message]")
+        await _btn(page, "Create post", "Создать пост").first.click(timeout=40000)
+        dialog = page.locator("[role=dialog]").filter(has=page.locator("[contenteditable=true]"))
+        box = dialog.locator("[contenteditable=true]").first
         # Если остался черновик (например, после репетиции), VK спрашивает «открыть черновик?» — начинаем заново.
         start_over = page.get_by_role("button", name=re.compile(r"^(start over|начать заново)$", re.I))
         try:
@@ -122,7 +146,7 @@ class VKPublisher(BrowserPublisher):
             await start_over.first.click()
         await box.wait_for(timeout=20000)
         if images:
-            await page.locator("[data-testid=posting_base_screen_download_from_device]").set_input_files(
+            await dialog.locator('input[type=file][accept^="image/"]').first.set_input_files(
                 [str(p) for p in images[:10]])
             await page.wait_for_timeout(4000 + 2500 * len(images[:10]))
         await _pause()
@@ -131,15 +155,15 @@ class VKPublisher(BrowserPublisher):
         await _pause()
         if _norm(await box.inner_text())[:80] != _norm(text)[:80]:
             raise PublishError("VK: текст вставился не полностью — публикацию остановил", retryable=False)
-        await page.locator("[data-testid=posting_base_screen_next]").click()
-        submit = page.locator("[data-testid=posting_submit_button]")
+        await _btn(page, "Next", "Далее").last.click()
+        submit = _btn(page, "Publish", "Опубликовать").last
         await submit.wait_for(timeout=20000)
         if rehearsal:
             shot = await self._shot(page, "rehearsal")
             return PublishResult("", None, {"rehearsal": True, "shot": shot}, ["репетиция: дошёл до кнопки «Publish», не нажимал"])
         await _pause(1.5, 3)
         await submit.click()
-        await page.locator("[data-testid=posting_submit_button]").wait_for(state="detached", timeout=60000)
+        await submit.wait_for(state="detached", timeout=60000)
         await page.wait_for_timeout(4000)
         url = self._match(await self._recent_posts(page), text)
         if not url:
@@ -249,6 +273,14 @@ class FBPublisher(BrowserPublisher):
         return None
 
 
+async def _largest(loc) -> dict:
+    """Холст редактора историй — самый большой canvas в окне редактора."""
+    boxes = [b for b in [await loc.nth(i).bounding_box() for i in range(await loc.count())] if b]
+    if not boxes:
+        raise PublishError("VK: не нашёл холст редактора историй", retryable=True)
+    return max(boxes, key=lambda b: b["width"] * b["height"])
+
+
 async def run_in_browser(fn, cdp_host: str = "browser"):
     """Любая работа в серверном Chromium (например, отрисовка карточки сторис) — под тем же замком."""
     async with _LOCK:
@@ -274,26 +306,30 @@ class VKStoryPublisher(VKPublisher):
                      rehearsal: bool) -> PublishResult:
         await page.goto(self._EDITOR, wait_until="domcontentloaded")
         await self._check_login(page)
-        modal = page.locator("[data-testid=modalbox]")
-        file_input = modal.locator("input[type=file]")
+        file_input = page.locator('input[type=file]').first
         try:
             await file_input.wait_for(state="attached", timeout=40000)
         except Exception:
             raise PublishError("VK: редактор историй не открылся", retryable=True)
         await file_input.set_input_files(str(card))
-        viewport = page.locator("[data-testid=photo-editor-viewport]")
-        await viewport.wait_for(timeout=40000)
+        stickers = _btn(page, "Stickers", "Стикеры").first
+        try:
+            await stickers.wait_for(timeout=40000)
+        except Exception:
+            raise PublishError("VK: редактор историй не открыл картинку", retryable=True)
+        editor = page.locator(".vkitInternalModalBox").filter(has=stickers)
         await page.wait_for_timeout(4000)
         await _pause()
-        await page.locator("[data-testid=sidebar-stickers-button]").click()
+        await stickers.click()
         await page.get_by_text(re.compile(r"^(add link|добавить ссылку)$", re.I)).click(timeout=20000)
-        await page.locator("[data-testid=modal-sticker-native-link-url]").fill(link_url)
-        await page.locator("[data-testid=modal-sticker-native-link-text]").fill(link_text[:30])
+        url_input = page.locator('input[type=text][placeholder*="://"]').last
+        await url_input.fill(link_url)
+        await page.locator('input[type=text]:not([placeholder*="://"])').last.fill(link_text[:30])
         await _pause()
-        await page.get_by_role("button", name=re.compile(r"^(add|добавить)$", re.I)).click()
+        await _btn(page, "Add", "Добавить").last.click()
         await page.wait_for_timeout(2500)
         # Стикер появляется в центре холста — переносим его туда, где на карточке оставлено место под кнопку.
-        box = await viewport.bounding_box()
+        box = await _largest(editor.locator("canvas"))
         cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
         tx, ty = box["x"] + box["width"] * cta_box["x"], box["y"] + box["height"] * cta_box["y"]
         await page.mouse.move(cx, cy)
@@ -303,14 +339,14 @@ class VKStoryPublisher(VKPublisher):
             await page.wait_for_timeout(40)
         await page.mouse.up()
         await page.wait_for_timeout(1500)
-        publish = page.locator("[data-testid=publish-button]")
+        publish = _btn(page, "Publish", "Опубликовать").last
         if rehearsal:
             shot = await self._shot(page, "rehearsal")
             return PublishResult("", None, {"rehearsal": True, "shot": shot}, ["репетиция: дошёл до кнопки «Publish», не нажимал"])
         await _pause(1.5, 3)
         await publish.click()
         try:
-            await modal.wait_for(state="detached", timeout=90000)
+            await editor.wait_for(state="detached", timeout=90000)
         except Exception:
             raise PublishError("VK: история не опубликовалась за 90 секунд", retryable=False)
         url = f"https://vk.ru/id{self.user_id}"

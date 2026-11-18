@@ -392,8 +392,11 @@ class SMMDaemon:
                 continue
             asyncio.create_task(self.run_post(post["id"]))
 
-    async def queue(self, post_id: int, nets: list[str] | None = None) -> None:
-        """Команда автора: опубликовать (во все сети или только в nets). Невышедшие сети пробуем снова."""
+    async def queue(self, post_id: int, nets: list[str] | None = None, *, auto: bool = False) -> None:
+        """Команда автора: опубликовать (во все сети или только в nets). Невышедшие сети пробуем снова.
+        auto — повтор, который демон назначил сам после сбоя (счётчик автоповторов не сбрасываем)."""
+        if not auto:
+            self.db.set(f"auto_retry:{post_id}", "0")
         if nets and "story" in nets:  # кнопка «Опубликовать» у сторис — это сторис на всех площадках
             nets = [n for n in nets if n != "story"] + self.story_nets()
         for pub in self.db.publications(post_id):
@@ -631,6 +634,7 @@ class SMMDaemon:
         media = json.loads(post["media_json"])
         delays = self.d.get("retry_delays_seconds", [30, 120])
         only = json.loads(self.db.get(f"queue_nets:{post_id}") or "null")
+        later: list[str] = []  # сети, где сбой временный: повторим сами через какое-то время
         for net in self.networks():
             if self.db.get("stopped") == "1":
                 break
@@ -669,12 +673,42 @@ class SMMDaemon:
                     self.db.upsert_publication(post_id, net, state="failed", error=str(exc)[:500], extra_json=dumps(done))
                     log.warning("%s: %s (попытка %d)", net, exc, attempt + 1)
                     if not exc.retryable or attempt + 1 >= self.d.get("max_attempts", 3):
+                        if exc.retryable:
+                            later.append(net)
                         break
                     await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
+        if later and await self.retry_later(post_id, later):
+            return
         pubs = self.db.publications(post_id)
         ok = all(p["state"] in ("published", "skipped") for p in pubs) and any(p["state"] == "published" for p in pubs)
         self.db.update_post(post_id, state="done" if ok else "partial")
-        await self.report(post_id)
+        rounds = int(self.db.get(f"auto_retry:{post_id}") or 0)
+        note = None
+        if rounds and later:
+            note = (f"⏳ Автоповторы закончились ({rounds}). Повторить вручную: /retry {self.db.post(post_id)['tg_msg_id']}")
+        elif rounds:
+            note = f"🔁 Получилось после автоповтора ({rounds})."
+        await self.report(post_id, note=note)
+
+    async def retry_later(self, post_id: int, nets: list[str]) -> bool:
+        """Временный сбой (сеть, таймаут, страница не загрузилась): ставим сети в очередь снова через паузу.
+        Сторис, которые ведут на эти посты, повторяем вместе с ними. False — повторы исчерпаны."""
+        waits = self.d.get("retry_later_minutes", [10, 30, 60, 180, 360])
+        rounds = int(self.db.get(f"auto_retry:{post_id}") or 0)
+        if rounds >= len(waits) or self.db.get("stopped") == "1":
+            return False
+        nets = nets + [n for n in self.story_nets() if (self.cfg.networks.get(n) or {}).get("after") in nets
+                       and n not in nets]
+        await self.queue(post_id, nets, auto=True)
+        self.db.set(f"auto_retry:{post_id}", str(rounds + 1))
+        when = datetime.now(timezone.utc) + timedelta(minutes=waits[rounds])
+        self.db.set(f"next_try:{post_id}", when.isoformat(timespec="seconds"))
+        names = ", ".join(NET_TITLES.get(n, n) for n in nets)
+        log.info("пост %s: автоповтор %d через %s мин: %s", post_id, rounds + 1, waits[rounds], names)
+        if rounds == 0:  # первый отчёт — сразу; дальше молчим до успеха или до конца повторов
+            await self.report(post_id, note=f"⏳ Не вышло: {names}. Повторю автоматически через {waits[0]} мин "
+                                            f"и дальше, пока не получится (до {len(waits)} раз).")
+        return True
 
     # --- отчёты и команды ----------------------------------------------------
 
@@ -684,7 +718,7 @@ class SMMDaemon:
         except Exception:
             log.exception("не удалось отправить уведомление автору")
 
-    async def report(self, post_id: int) -> None:
+    async def report(self, post_id: int, *, note: str | None = None) -> None:
         post = self.db.post(post_id)
         gen = json.loads(post["gen_json"] or "{}")
         title = (post["text"].strip().splitlines() or [""])[0][:60]
@@ -715,6 +749,8 @@ class SMMDaemon:
         if gen.get("links"):
             lines.append(f"Ссылок: {len(gen['links'])}, пересказано вместо ссылки хотя бы в одной сети: {retold}")
         lines.append(f"LLM: ${gen.get('cost', 0):.2f}")
+        if note:
+            lines.append(note)
         await self.notify("\n".join(lines))
         self.db.update_post(post_id, report_sent=1)
 
