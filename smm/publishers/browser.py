@@ -122,6 +122,21 @@ class VKPublisher(BrowserPublisher):
             return out;
         }""", date_link)
 
+    async def _story_toggle_off(self, page: Page) -> None:
+        idx = await page.evaluate("""() => [...document.querySelectorAll('[role=dialog] input[type=checkbox]')].findIndex(c => {
+            let e = c;  // подпись переключателя — у ближайшего предка с текстом
+            for (let i = 0; i < 5 && e && !(e.innerText || '').trim(); i++) e = e.parentElement;
+            return /publish as story|в истори/i.test((e && e.innerText) || '');
+        })""")
+        if idx < 0:
+            return
+        box = page.locator("[role=dialog] input[type=checkbox]").nth(idx)
+        if await box.is_checked():
+            await box.uncheck(force=True)
+            await page.wait_for_timeout(500)
+            if await box.is_checked():
+                raise PublishError("VK: не удалось выключить «Опубликовать в истории»", retryable=True)
+
     def _match(self, posts: list[tuple[str, str]], text: str) -> str | None:
         head = _norm(text)[:60]
         return next((href for href, body in posts if head and head[:40] in _norm(body)), None)
@@ -158,6 +173,8 @@ class VKPublisher(BrowserPublisher):
         await _btn(page, "Next", "Далее").last.click()
         submit = _btn(page, "Publish", "Опубликовать").last
         await submit.wait_for(timeout=20000)
+        # VK (ноябрь 2026) по умолчанию включает «Publish as story» — выключаем: сторис мы делаем свою.
+        await self._story_toggle_off(page)
         if rehearsal:
             shot = await self._shot(page, "rehearsal")
             return PublishResult("", None, {"rehearsal": True, "shot": shot}, ["репетиция: дошёл до кнопки «Publish», не нажимал"])
@@ -317,7 +334,6 @@ class VKStoryPublisher(VKPublisher):
             await stickers.wait_for(timeout=40000)
         except Exception:
             raise PublishError("VK: редактор историй не открыл картинку", retryable=True)
-        editor = page.locator(".vkitInternalModalBox").filter(has=stickers)
         await page.wait_for_timeout(4000)
         await _pause()
         await stickers.click()
@@ -329,7 +345,7 @@ class VKStoryPublisher(VKPublisher):
         await _btn(page, "Add", "Добавить").last.click()
         await page.wait_for_timeout(2500)
         # Стикер появляется в центре холста — переносим его туда, где на карточке оставлено место под кнопку.
-        box = await _largest(editor.locator("canvas"))
+        box = await _largest(page.locator("canvas"))
         cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
         tx, ty = box["x"] + box["width"] * cta_box["x"], box["y"] + box["height"] * cta_box["y"]
         await page.mouse.move(cx, cy)
@@ -346,7 +362,7 @@ class VKStoryPublisher(VKPublisher):
         await _pause(1.5, 3)
         await publish.click()
         try:
-            await editor.wait_for(state="detached", timeout=90000)
+            await stickers.wait_for(state="detached", timeout=90000)  # редактор закрылся — история ушла
         except Exception:
             raise PublishError("VK: история не опубликовалась за 90 секунд", retryable=False)
         url = f"https://vk.ru/id{self.user_id}"
